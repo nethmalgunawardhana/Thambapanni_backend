@@ -1,36 +1,18 @@
-const jwt = require('jsonwebtoken');
 const admin = require('../config/firebase-config');
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
+const { CustomError } = require('../utils/errors');
 
 exports.verifyFirebaseToken = async (req, res, next) => {
   try {
-    const { firebaseToken } = req.body;
-    
-    if (!firebaseToken) {
-      return res.status(401).json({ error: 'No token provided' });
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      throw new CustomError('No token provided', 401);
     }
 
-    const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
+    const token = authHeader.split(' ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
     next();
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-};
-
-exports.verifyJWT = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    next(new CustomError('Invalid token', 401));
   }
 };
