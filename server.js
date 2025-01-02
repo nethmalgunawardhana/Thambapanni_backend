@@ -2,7 +2,7 @@ const express = require('express');
 const app = express();
 const port = 3000;
 const cors = require('cors');
-const authRoutes = require('./routes/auth');
+const authRoutes = require('./routes/user.routes');
 
 app.use(express.json());
 app.use(cors());
@@ -11,7 +11,7 @@ app.get('/', (req, res) => {
   res.send('Hello, World!');
 });
 
-app.use('/auth', authRoutes);
+app.use('/api/users', authRoutes);
 
 // Start the server
 app.listen(port, () => {
