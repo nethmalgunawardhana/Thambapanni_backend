@@ -78,14 +78,13 @@ router.post('/login', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Example protected route
+
 router.get('/profile', verifyJWT, async (req, res) => {
   try {
-    // Access user data from req.user
+   
     const { uid, email } = req.user;
     
-    // Fetch user profile from your database
-    // const userProfile = await UserModel.findOne({ uid });
+
     
     res.json({ 
       message: 'Profile accessed successfully',
