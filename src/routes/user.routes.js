@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { verifyFirebaseToken } = require('../middleware/auth');
-const AuthController = require('../../controllers/auth.controller');
+const AuthController = require('../controllers/auth.controller');
 
 const authController = new AuthController();
 

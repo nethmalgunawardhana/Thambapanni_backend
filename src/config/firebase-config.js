@@ -1,8 +1,6 @@
-import * as admin from 'firebase-admin';
+const admin = require("firebase-admin");
 
-
-const admin = require('firebase-admin');
-const serviceAccount = require('../serviceAccountKey.json'); // Download this from Firebase Console
+const serviceAccount = require('../../serviceAccountKey.json'); // Download this from Firebase Console
 
 if (!admin.apps.length) {
     admin.initializeApp({

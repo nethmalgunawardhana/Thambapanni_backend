@@ -1,4 +1,4 @@
-const { db } = require('../src/config/firebase-admin');
+const { db } = require('../config/firebase-config');
 const { CustomError } = require('../utils/errors');
 
 class UserService {
