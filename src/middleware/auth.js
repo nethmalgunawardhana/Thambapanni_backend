@@ -1,18 +1,18 @@
-const admin = require('../config/firebase-config');
-const { CustomError } = require('../utils/errors');
+const { admin } = require('../config/firebase-config');
 
-exports.verifyFirebaseToken = async (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      throw new CustomError('No token provided', 401);
+    const token = req.headers.authorization?.split('Bearer ')[1];
+    if (!token) {
+      return res.status(401).json({ message: 'No token provided' });
     }
 
-    const token = authHeader.split(' ')[1];
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
     next();
   } catch (error) {
-    next(new CustomError('Invalid token', 401));
+    res.status(401).json({ message: 'Invalid token' });
   }
 };
+
+module.exports = { authMiddleware };

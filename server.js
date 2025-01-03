@@ -1,19 +1,24 @@
 const express = require('express');
-const app = express();
-const port = 3000;
 const cors = require('cors');
 const authRoutes = require('./src/routes/user.routes');
 
-app.use(express.json());
-app.use(cors());
+const app = express();
 
-app.get('/', (req, res) => {
-  res.send('Hello, World!');
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Routes
+app.use('/api/auth', authRoutes);
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something went wrong!', error: err.message });
 });
 
-app.use('/api/users', authRoutes);
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Server is running at http://localhost:${port}`);
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });

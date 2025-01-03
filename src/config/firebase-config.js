@@ -1,18 +1,21 @@
-const admin = require("firebase-admin");
-
-const serviceAccount = require('../../serviceAccountKey.json'); // Download this from Firebase Console
+const admin = require('firebase-admin');
+const serviceAccount = require('../../serviceAccountKey.json');
 
 if (!admin.apps.length) {
+  try {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
+    console.log('Firebase Admin SDK initialized successfully');
+  } catch (error) {
+    console.error('Error initializing Firebase Admin SDK:', error);
+    throw error;
   }
-// Export Firebase services
-const auth = admin.auth();
+}
+
+// Initialize Firestore
 const db = admin.firestore();
 
-// Create timestamps
-const timestamp = admin.firestore.FieldValue.serverTimestamp();
-const timestampFromDate = admin.firestore.Timestamp.fromDate;
+module.exports = { admin, db };
 
-module.exports = { auth, db, timestamp, timestampFromDate };
+
