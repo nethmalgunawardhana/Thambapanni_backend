@@ -1,4 +1,8 @@
-const { db, } = require('../config/firebase');
+const { db } = require('../config/firebase');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+
+const SECRET_KEY = process.env.SECRET_KEY; // Replace with an environment variable in production
 
 // Handle user registration
 exports.registerUser = async (req, res) => {
@@ -14,6 +18,8 @@ exports.registerUser = async (req, res) => {
       return res.status(400).json({ message: 'User already exists' });
     }
 
+    const hashedPassword = await bcrypt.hash(password, 10); // Hash the password
+
     const userRef = await db.collection('users').add({
       firstName,
       lastName,
@@ -21,7 +27,7 @@ exports.registerUser = async (req, res) => {
       nationality,
       gender,
       dateOfBirth,
-      password,
+      password: hashedPassword,
       createdAt: new Date().toISOString(),
     });
 
@@ -48,12 +54,28 @@ exports.loginUser = async (req, res) => {
     }
 
     const userData = userSnapshot.docs[0].data();
+    const isPasswordValid = await bcrypt.compare(password, userData.password); // Compare hashed passwords
 
-    if (userData.password !== password) {
+    if (!isPasswordValid) {
       return res.status(401).json({ message: 'Invalid password' });
     }
 
-    res.status(200).json({ message: 'Login successful', user: userData });
+    // Generate a JWT
+    const token = jwt.sign(
+      { email: userData.email, userId: userSnapshot.docs[0].id },
+      SECRET_KEY,
+      { expiresIn: '1h' }
+    );
+
+    res.status(200).json({
+      message: 'Login successful',
+      token,
+      user: {
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        email: userData.email,
+      },
+    });
   } catch (error) {
     console.error('Error during login:', error);
     res.status(500).json({ message: 'Internal server error' });

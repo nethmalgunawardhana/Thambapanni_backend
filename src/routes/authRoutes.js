@@ -1,13 +1,17 @@
 const express = require('express');
 const { registerUser, loginUser } = require('../controllers/authController');
 const { validateRequest } = require('../middleware/auth');
+const { verifyToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// Register route
+// Public routes
 router.post('/register', registerUser);
-
-// Login route with middleware
 router.post('/login', validateRequest, loginUser);
+
+// Protected routes
+router.get('/profile', verifyToken, (req, res) => {
+  res.status(200).json({ message: 'Access granted to profile', user: req.user });
+});
 
 module.exports = router;
