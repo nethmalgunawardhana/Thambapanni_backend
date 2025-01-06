@@ -2,9 +2,9 @@ const { db } = require('../config/firebase');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-
+const sgMail = require('@sendgrid/mail')
 let otpStorage = {}; // Temporary OTP storage (for production, use a database)
-
+sgMail.setApiKey(process.env.SENDGRID_API_KEY)
 // Send OTP to email
 exports.sendOtp = async (req, res) => {
   const { email } = req.body;
@@ -23,22 +23,40 @@ exports.sendOtp = async (req, res) => {
     const otp = crypto.randomInt(100000, 999999).toString();
     otpStorage[email] = otp; // Store OTP temporarily
 
-    // Configure Nodemailer
+   /*  // Configure Nodemailer
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: 'adithabuwaneka0@gmail.com', // Your email
-        pass: 'grtf aaha ejcx exrc', // Your email password or app-specific password
+        user:process.env.MAIL_NAME, // Your email
+        pass: process.env.MAIL_PASSWORD, // Your email password or app-specific password
       },
-    });
+    }); */
 
-    // Send email 
+    const msg = {
+      to: email, // Change to your recipient
+      from: process.env.MAIL_NAME, // Change to your verified sender
+      templateId: process.env.SENDGRID_TEMPLATE_ID, // Add your template ID here
+      dynamicTemplateData: {
+        otp: otp, // Pass the OTP as dynamic data
+        subject: 'Your Password Reset OTP', // Additional dynamic fields if needed
+      },
+    }
+    sgMail
+  .send(msg)
+  .then(() => {
+    console.log('Email sent')
+  })
+  .catch((error) => {
+    console.error(error)
+  })
+
+    /* // Send email 
     await transporter.sendMail({
       from: 'adithabuwaneka0@gmail.com',
       to: email,
       subject: 'Password Reset OTP',
       text: `Your OTP for password reset is ${otp}. This code will expire in 10 minutes.`,
-    });
+    }); */
 
     res.status(200).json({ message: 'OTP sent successfully to your email.' });
   } catch (error) {
