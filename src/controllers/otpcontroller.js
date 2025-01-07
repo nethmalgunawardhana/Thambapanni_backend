@@ -1,10 +1,12 @@
+// Import necessary modules
 const { db } = require('../config/firebase');
-const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const sgMail = require('@sendgrid/mail')
-let otpStorage = {}; // Temporary OTP storage (for production, use a database)
-sgMail.setApiKey(process.env.SENDGRID_API_KEY)
+const sgMail = require('@sendgrid/mail');
+
+// Set SendGrid API key
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
 // Send OTP to email
 exports.sendOtp = async (req, res) => {
   const { email } = req.body;
@@ -19,44 +21,30 @@ exports.sendOtp = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Generate OTP
+    // Generate OTP and expiration time
     const otp = crypto.randomInt(100000, 999999).toString();
-    otpStorage[email] = otp; // Store OTP temporarily
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
 
-   /*  // Configure Nodemailer
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user:process.env.MAIL_NAME, // Your email
-        pass: process.env.MAIL_PASSWORD, // Your email password or app-specific password
-      },
-    }); */
+    // Save OTP to Firestore
+    await db.collection('otp').doc(email).set({
+      otp,
+      email,
+      expiresAt,
+    });
 
+    // Configure SendGrid email
     const msg = {
-      to: email, // Change to your recipient
-      from: process.env.MAIL_NAME, // Change to your verified sender
-      templateId: process.env.SENDGRID_TEMPLATE_ID, // Add your template ID here
-      dynamicTemplateData: {
-        otp: otp, // Pass the OTP as dynamic data
-        subject: 'Your Password Reset OTP', // Additional dynamic fields if needed
-      },
-    }
-    sgMail
-  .send(msg)
-  .then(() => {
-    console.log('Email sent')
-  })
-  .catch((error) => {
-    console.error(error)
-  })
-
-    /* // Send email 
-    await transporter.sendMail({
-      from: 'adithabuwaneka0@gmail.com',
       to: email,
-      subject: 'Password Reset OTP',
-      text: `Your OTP for password reset is ${otp}. This code will expire in 10 minutes.`,
-    }); */
+      from: process.env.MAIL_NAME, // Your verified sender
+      templateId: process.env.SENDGRID_TEMPLATE_ID, // Your SendGrid template ID
+      dynamicTemplateData: {
+        otp,
+        subject: 'Your Password Reset OTP',
+      },
+    };
+
+    // Send email
+    await sgMail.send(msg);
 
     res.status(200).json({ message: 'OTP sent successfully to your email.' });
   } catch (error) {
@@ -64,8 +52,6 @@ exports.sendOtp = async (req, res) => {
     res.status(500).json({ message: 'Error sending OTP' });
   }
 };
-
-
 
 // Verify OTP
 exports.verifyOtp = async (req, res) => {
@@ -76,13 +62,24 @@ exports.verifyOtp = async (req, res) => {
   }
 
   try {
-    // Check if the OTP exists for the email
-    if (!otpStorage[email] || otpStorage[email] !== otp) {
+    const otpDoc = await db.collection('otp').doc(email).get();
+
+    if (!otpDoc.exists) {
       return res.status(400).json({ message: 'Invalid or expired OTP' });
     }
 
-    
-    
+    const { otp: storedOtp, expiresAt } = otpDoc.data();
+
+    // Check if OTP is expired
+    if (new Date() > expiresAt.toDate()) {
+      await db.collection('otp').doc(email).delete(); // Clean up expired OTP
+      return res.status(400).json({ message: 'OTP has expired' });
+    }
+
+    if (storedOtp !== otp) {
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
     res.status(200).json({ message: 'OTP verified successfully' });
   } catch (error) {
     console.error('Error verifying OTP:', error);
@@ -99,8 +96,21 @@ exports.resetPassword = async (req, res) => {
   }
 
   try {
-    // Check OTP
-    if (otpStorage[email] !== otp) {
+    const otpDoc = await db.collection('otp').doc(email).get();
+
+    if (!otpDoc.exists) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+
+    const { otp: storedOtp, expiresAt } = otpDoc.data();
+
+    // Check if OTP is expired
+    if (new Date() > expiresAt.toDate()) {
+      await db.collection('otp').doc(email).delete(); // Clean up expired OTP
+      return res.status(400).json({ message: 'OTP has expired' });
+    }
+
+    if (storedOtp !== otp) {
       return res.status(400).json({ message: 'Invalid OTP' });
     }
 
@@ -119,8 +129,8 @@ exports.resetPassword = async (req, res) => {
       password: hashedPassword,
     });
 
-    // Clear OTP after use
-    delete otpStorage[email];
+    // Clean up OTP after successful password reset
+    await db.collection('otp').doc(email).delete();
 
     res.status(200).json({ message: 'Password reset successfully.' });
   } catch (error) {
