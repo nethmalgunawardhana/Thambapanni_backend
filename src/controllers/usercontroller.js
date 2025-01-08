@@ -140,3 +140,87 @@ const isValidDate = (dateString) => {
   const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
   return dateRegex.test(dateString) && !isNaN(Date.parse(dateString));
 };
+
+exports.uploadProfilePhoto = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    const userId = req.user.uid;
+    const file = req.file;
+    
+    // Create a unique filename
+    const timestamp = Date.now();
+    const fileName = `profile-photos/${userId}-${timestamp}`;
+    
+    // Get bucket reference
+    const bucket = admin.storage().bucket();
+    const fileUpload = bucket.file(fileName);
+    
+    // Create write stream and upload
+    const blobStream = fileUpload.createWriteStream({
+      metadata: {
+        contentType: file.mimetype
+      }
+    });
+
+    blobStream.on('error', (error) => {
+      console.error('Upload error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to upload image'
+      });
+    });
+
+    blobStream.on('finish', async () => {
+      try {
+        // Make the file publicly accessible
+        await fileUpload.makePublic();
+        
+        // Get the public URL
+        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        
+        // Update user's profile in Firestore
+        await db.collection('users').doc(userId).update({
+          profilePhoto: publicUrl,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        // Add to images collection
+        await db.collection('images').add({
+          userId: userId,
+          url: publicUrl,
+          type: 'profile',
+          fileName: fileName,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        res.status(200).json({
+          success: true,
+          message: 'Profile photo uploaded successfully',
+          photoUrl: publicUrl
+        });
+      } catch (error) {
+        console.error('Post-upload processing error:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to process uploaded image'
+        });
+      }
+    });
+
+    blobStream.end(file.buffer);
+    
+  } catch (error) {
+    console.error('Upload controller error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload profile photo',
+      error: error.message
+    });
+  }
+};
