@@ -35,16 +35,6 @@ const upload = multer({
     }
 }).single('license');
 
-// Add error handling for Vercel's body size limit
-const vercelBodyParser = (req, res, next) => {
-    if (req.headers['content-length'] > 4.5 * 1024 * 1024) { // 4.5MB in bytes
-        return res.status(413).json({ 
-            success: false, 
-            message: 'File too large. Maximum size is 4.5MB.' 
-        });
-    }
-    next();
-};
 
 // Helper function to upload file to ImageKit
 const uploadToImageKit = async (fileBuffer, fileName) => {
@@ -64,7 +54,7 @@ const uploadToImageKit = async (fileBuffer, fileName) => {
 // Submit Guide Application with ImageKit integration
 exports.submitGuideApplication = (req, res) => {
     // Apply Vercel body size check before processing the upload
-    vercelBodyParser(req, res, () => {
+    
         upload(req, res, async (err) => {
         if (err) {
             console.error('File upload error:', err);
@@ -143,7 +133,7 @@ exports.submitGuideApplication = (req, res) => {
             });
         }
     });
-    });
+
 };
 
 // Admin Verify or Reject Application
