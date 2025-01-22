@@ -31,7 +31,7 @@ const upload = multer({
     }
     cb(null, true);
   },
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
+  limits: { fileSize: 4.0 * 1024 * 1024 }, // 5MB file size limit
 }).single('license');
 
 // Admin Verify or Reject Application
