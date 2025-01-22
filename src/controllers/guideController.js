@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const { db } = require('../config/firebase');
 const sgMail = require('@sendgrid/mail');
 const jwt = require('jsonwebtoken');
@@ -26,7 +28,7 @@ const upload = multer({
     cb(null, true);
   },
   limits: {
-    fileSize: 4.5 * 1024 * 1024, // 4.5MB file size limit
+    fileSize: 2 * 1024 * 1024, // 4.5MB file size limit
   },
 }).single('license');
 
