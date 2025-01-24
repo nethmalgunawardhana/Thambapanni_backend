@@ -89,16 +89,18 @@ exports.verifyEmail = async (req, res) => {
     console.error('Error verifying email:', error);
 
     if (error.name === 'TokenExpiredError') {
-      const decoded = jwt.decode(token);
+      const decoded = jwt.decode(token); // Decode the token to get the email
       const { email } = decoded;
 
       const userSnapshot = await db.collection('users').where('email', '==', email).get();
       if (!userSnapshot.empty) {
         const userId = userSnapshot.docs[0].id;
+        const user = userSnapshot.docs[0].data(); // Extract user data
+
         // Check if the user's `isVerified` field is false
-    if (!user.isVerified) {
-      await db.collection('users').doc(userId).delete();
-    }
+        if (!user.isVerified) {
+          await db.collection('users').doc(userId).delete();
+        }
       }
 
       return res.sendFile(path.join(__dirname, '../../public/email-verification-failure.html'));
@@ -107,6 +109,7 @@ exports.verifyEmail = async (req, res) => {
     res.status(400).json({ message: 'Invalid token or an unknown error occurred.' });
   }
 };
+
 
 // Handle user login
 exports.loginUser = async (req, res) => {
