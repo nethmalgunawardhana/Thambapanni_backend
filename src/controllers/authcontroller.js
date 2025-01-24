@@ -86,7 +86,7 @@ exports.verifyEmail = async (req, res) => {
 
     res.sendFile(path.join(__dirname, '../../public/email-verification-success.html'));
   } catch (error) {
-    console.error('Error verifying email:', error);
+    //console.error('Error verifying email:', error);
 
     if (error.name === 'TokenExpiredError') {
       const decoded = jwt.decode(token); // Decode the token to get the email
