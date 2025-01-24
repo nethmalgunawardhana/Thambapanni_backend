@@ -8,7 +8,7 @@ const ImageKit = require('imagekit');
 
 // SendGrid setup
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-const SENDGRID_TEMPLATE_ID = process.env.SENDGRID_TEMPLATE_ID;
+const SENDGRID_TEMPLATE_ID = process.env.SENDGRID_TEMPLATE_ID_3;
 const SECRET_KEY = process.env.SECRET_KEY;
 
 // ImageKit setup
