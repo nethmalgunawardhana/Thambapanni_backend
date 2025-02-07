@@ -5,10 +5,11 @@ const generateTripPlan = async (req, res) => {
     const { destinations, categoryType, days, members, budgetRange } = req.body;
 
     const prompt = `
-      Generate a detailed ${days}-day travel itinerary for ${members} people, visiting ${destinations.join(", ")}.
-      The trip falls under the "${categoryType}" category with a budget range of "${budgetRange}".
-      Provide a structured JSON response in the following format:
-      
+      Generate a structured ${days}-day travel itinerary for ${members} people visiting ${destinations.join(", ")}.
+      The trip is categorized as "${categoryType}" and has a budget range of "${budgetRange}".
+      Return the response **strictly in JSON format only**, without Markdown, explanations, or extra text.
+
+      JSON format:
       {
         "tripTitle": "Trip to ${destinations[0]} and more",
         "days": [
@@ -19,13 +20,7 @@ const generateTripPlan = async (req, res) => {
               {
                 "time": "08:00 AM",
                 "destination": "Place 1",
-                "description": "Visit this attraction",
-                "image": "Image URL"
-              },
-              {
-                "time": "02:00 PM",
-                "destination": "Place 2",
-                "description": "Enjoy the beach",
+                "description": "Activity details",
                 "image": "Image URL"
               }
             ],
@@ -35,21 +30,19 @@ const generateTripPlan = async (req, res) => {
           }
         ]
       }
-
-      Ensure that:
-      - The trip spans ${days} days.
-      - Each day has at least 2-3 activities.
-      - Include transportation and accommodation details.
-      - Provide estimated costs for the day.
-      - Use proper date formatting.
     `;
 
     const model = genAI.getGenerativeModel({ model: "gemini-pro" });
     const result = await model.generateContent(prompt);
-    const response = await result.response;
+    const responseText = await result.response.text();
 
-    // Parse AI-generated JSON response
-    const tripPlan = JSON.parse(response.text());
+    // 🔹 Extract JSON safely
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/); // Find first JSON object
+    if (!jsonMatch) {
+      throw new Error("AI response is not valid JSON");
+    }
+
+    const tripPlan = JSON.parse(jsonMatch[0]); // Parse extracted JSON
 
     res.json({ success: true, tripPlan });
   } catch (error) {
@@ -59,4 +52,3 @@ const generateTripPlan = async (req, res) => {
 };
 
 module.exports = { generateTripPlan };
-
