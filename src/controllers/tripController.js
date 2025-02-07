@@ -4,12 +4,8 @@ const generateTripPlan = async (req, res) => {
   try {
     const { destinations, categoryType, days, members, budgetRange } = req.body;
 
-    // Validate input
     if (!destinations || !destinations.length) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Destinations are required' 
-      });
+      return res.status(400).json({ success: false, error: 'Destinations are required' });
     }
 
     const prompt = `
@@ -56,65 +52,51 @@ Output Format:
     const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       generationConfig: {
-        // Increase maximum output tokens to prevent truncation
-        maxOutputTokens: 4096,
-        // Add some randomness to prevent repetitive responses
-        temperature: 0.7
+        maxOutputTokens: 2048,  // Reduce token size to prevent long execution
+        temperature: 0.8,  // Slightly increase randomness
       }
     });
 
-    // Set a longer timeout for the API call
-    const result = await Promise.race([
-      model.generateContent(prompt),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Generation timeout')), 25000)
-      )
-    ]);
+    const fetchAIResponse = async (retryCount = 0) => {
+      try {
+        // Set a reasonable timeout (20 seconds)
+        const result = await Promise.race([
+          model.generateContent(prompt),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 20000))
+        ]);
 
-    const responseText = await result.response.text();
+        return await result.response.text();
+      } catch (error) {
+        if (retryCount < 2) {
+          console.warn(`Retrying AI call (${retryCount + 1}/2)...`);
+          await new Promise(res => setTimeout(res, 2000 * (retryCount + 1))); // Exponential backoff
+          return fetchAIResponse(retryCount + 1);
+        }
+        throw error;
+      }
+    };
 
-    // More robust JSON extraction
-    const cleanedResponse = responseText
-      .replace(/```json\n?/g, '')
-      .replace(/```/g, '')
-      .trim();
+    const responseText = await fetchAIResponse();
 
+    const cleanedResponse = responseText.replace(/```json\n?/g, '').replace(/```/g, '').trim();
     let tripPlan;
+    
     try {
       tripPlan = JSON.parse(cleanedResponse);
     } catch (parseError) {
       console.error('JSON Parsing Error:', parseError);
-      console.error('Response Text:', cleanedResponse);
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to parse AI response',
-        rawResponse: cleanedResponse
-      });
+      return res.status(500).json({ success: false, error: 'Failed to parse AI response', rawResponse: cleanedResponse });
     }
 
-    // Validate the generated trip plan
     if (!tripPlan.days || !Array.isArray(tripPlan.days)) {
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Invalid trip plan structure',
-        rawResponse: cleanedResponse
-      });
+      return res.status(500).json({ success: false, error: 'Invalid trip plan structure', rawResponse: cleanedResponse });
     }
 
-    res.json({ 
-      success: true, 
-      tripPlan 
-    });
+    res.json({ success: true, tripPlan });
 
   } catch (error) {
     console.error('Error generating trip plan:', error);
-    
-    // More detailed error response
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to generate trip plan',
-      details: error.message
-    });
+    res.status(500).json({ success: false, error: 'Failed to generate trip plan', details: error.message });
   }
 };
 
