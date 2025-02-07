@@ -54,7 +54,7 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
       try {
         const result = await Promise.race([
           model.generateContent(prompt),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 15000)) // Reduced timeout
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 60000)) // Reduced timeout
         ]);
         return result.response.text();
       } catch (error) {
