@@ -41,34 +41,43 @@ Details:
 Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra text.
 `;
 
-    const model = genAI.getGenerativeModel({
+    const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       generationConfig: {
-        maxOutputTokens: 1024, // Reduce token count to avoid long responses
-        temperature: 0.5, // Lower randomness for structured output
+        maxOutputTokens: 2048, // Increase to ensure full response
+        temperature: 0.7
       }
     });
 
-    // Function to fetch AI response with optimized timeout handling
-    const fetchAIResponse = async () => {
+    const fetchAIResponse = async (retryCount = 0) => {
       try {
         const result = await Promise.race([
           model.generateContent(prompt),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 60000)) // Reduced timeout
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 20000))
         ]);
-        return result.response.text();
+
+        return await result.response.text();
       } catch (error) {
-        console.error("AI call failed:", error);
+        if (retryCount < 2) {
+          console.warn(`Retrying AI call (${retryCount + 1}/2)...`);
+          await new Promise(res => setTimeout(res, 2000 * (retryCount + 1)));
+          return fetchAIResponse(retryCount + 1);
+        }
         throw error;
       }
     };
 
     let responseText = await fetchAIResponse();
 
-    // **Fix: Remove markdown formatting (if present)**
+    // **Fix: Remove markdown code block formatting**
     responseText = responseText.replace(/```json|```/g, "").trim();
 
-    // **Validate and Parse JSON**
+    // **Fix: Ensure JSON is complete**
+    if (!responseText.endsWith("}")) {
+      console.warn("Truncated JSON detected, attempting to fix...");
+      responseText += "}"; // Close the JSON if needed
+    }
+
     let tripPlan;
     try {
       tripPlan = JSON.parse(responseText);
