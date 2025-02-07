@@ -16,7 +16,7 @@ Generate a structured ${days}-day travel itinerary in JSON format only. Do not i
   "days": [
     {
       "day": 1,
-      "date": "2024-02-15",
+      "date": "YYYY-MM-DD",
       "activities": [
         {
           "time": "08:00 AM",
@@ -44,7 +44,7 @@ Respond only with a valid JSON object and nothing else.
     const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       generationConfig: {
-        maxOutputTokens: 1024,  // Reduce response size for faster execution
+        maxOutputTokens: 1024,
         temperature: 0.7
       }
     });
@@ -60,14 +60,17 @@ Respond only with a valid JSON object and nothing else.
       } catch (error) {
         if (retryCount < 2) {
           console.warn(`Retrying AI call (${retryCount + 1}/2)...`);
-          await new Promise(res => setTimeout(res, 2000 * (retryCount + 1))); // Exponential backoff
+          await new Promise(res => setTimeout(res, 2000 * (retryCount + 1)));
           return fetchAIResponse(retryCount + 1);
         }
         throw error;
       }
     };
 
-    const responseText = await fetchAIResponse();
+    let responseText = await fetchAIResponse();
+
+    // **Fix: Remove markdown code block formatting**
+    responseText = responseText.replace(/```json|```/g, "").trim();
 
     let tripPlan;
     try {
