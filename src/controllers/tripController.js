@@ -38,13 +38,13 @@ Details:
 - Budget Range: ${budgetRange}
 - Members: ${members} people
 
-Respond only with a valid JSON object and nothing else.
+Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra text.
 `;
 
     const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       generationConfig: {
-        maxOutputTokens: 1024,
+        maxOutputTokens: 2048, // Increase to ensure full response
         temperature: 0.7
       }
     });
@@ -53,7 +53,7 @@ Respond only with a valid JSON object and nothing else.
       try {
         const result = await Promise.race([
           model.generateContent(prompt),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 15000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 20000))
         ]);
 
         return await result.response.text();
@@ -71,6 +71,12 @@ Respond only with a valid JSON object and nothing else.
 
     // **Fix: Remove markdown code block formatting**
     responseText = responseText.replace(/```json|```/g, "").trim();
+
+    // **Fix: Ensure JSON is complete**
+    if (!responseText.endsWith("}")) {
+      console.warn("Truncated JSON detected, attempting to fix...");
+      responseText += "}"; // Close the JSON if needed
+    }
 
     let tripPlan;
     try {
