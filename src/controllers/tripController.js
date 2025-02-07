@@ -9,25 +9,8 @@ const generateTripPlan = async (req, res) => {
     }
 
     const prompt = `
-Please generate a structured ${days}-day travel itinerary for ${members} people visiting ${destinations.join(", ")}.
-Trip Category: ${categoryType}
-Budget Range: ${budgetRange}
+Generate a structured ${days}-day travel itinerary in JSON format only. Do not include explanations, text, or markdown formatting.
 
-Guidelines for the itinerary:
-- Create a detailed day-by-day plan
-- Include specific activities, times, and locations
-- Suggest transportation and accommodation
-- Estimate daily costs
-- Focus on ${categoryType} experiences
-
-Response Requirements:
-- Return ONLY a valid JSON object
-- Use realistic, specific destination details
-- Ensure activities match the destination and category type
-- Format dates as YYYY-MM-DD
-- Include an image URL for each activity (can be placeholder)
-
-Output Format:
 {
   "tripTitle": "Descriptive trip title",
   "days": [
@@ -47,22 +30,30 @@ Output Format:
       "estimatedCost": "$XXX"
     }
   ]
-}`;
+}
+
+Details:
+- Destinations: ${destinations.join(", ")}
+- Category Type: ${categoryType}
+- Budget Range: ${budgetRange}
+- Members: ${members} people
+
+Respond only with a valid JSON object and nothing else.
+`;
 
     const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       generationConfig: {
-        maxOutputTokens: 2048,  // Reduce token size to prevent long execution
-        temperature: 0.8,  // Slightly increase randomness
+        maxOutputTokens: 1024,  // Reduce response size for faster execution
+        temperature: 0.7
       }
     });
 
     const fetchAIResponse = async (retryCount = 0) => {
       try {
-        // Set a reasonable timeout (20 seconds)
         const result = await Promise.race([
           model.generateContent(prompt),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 20000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Generation timeout')), 15000))
         ]);
 
         return await result.response.text();
@@ -78,18 +69,16 @@ Output Format:
 
     const responseText = await fetchAIResponse();
 
-    const cleanedResponse = responseText.replace(/```json\n?/g, '').replace(/```/g, '').trim();
     let tripPlan;
-    
     try {
-      tripPlan = JSON.parse(cleanedResponse);
+      tripPlan = JSON.parse(responseText);
     } catch (parseError) {
       console.error('JSON Parsing Error:', parseError);
-      return res.status(500).json({ success: false, error: 'Failed to parse AI response', rawResponse: cleanedResponse });
+      return res.status(500).json({ success: false, error: 'Failed to parse AI response', rawResponse: responseText });
     }
 
     if (!tripPlan.days || !Array.isArray(tripPlan.days)) {
-      return res.status(500).json({ success: false, error: 'Invalid trip plan structure', rawResponse: cleanedResponse });
+      return res.status(500).json({ success: false, error: 'Invalid trip plan structure', rawResponse: responseText });
     }
 
     res.json({ success: true, tripPlan });
