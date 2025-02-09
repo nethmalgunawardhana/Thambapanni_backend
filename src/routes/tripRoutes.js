@@ -5,6 +5,6 @@ const router = express.Router();
 
 router.post('/generate-trip-plan', generateTripPlan);
 router.get('/public', getAllTripPlans);
-router.get('/user/:userId', getTripPlansByUserId);
+router.get('/my-trips', getTripPlansByUserId);
 
 module.exports = router;
