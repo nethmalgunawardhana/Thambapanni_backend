@@ -1,4 +1,6 @@
 const genAI = require('../config/geminiConfig');
+const { db } = require('../config/firebase');
+
 
 const generateTripPlan = async (req, res) => {
   try {
@@ -91,6 +93,27 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
     }
 
     res.json({ success: true, tripPlan });
+    // Then store in Firestore
+    try {
+      const tripData = {
+        ...tripPlan,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        userId: req.user?.id || 'anonymous', // Assuming you have user authentication
+        searchParams: {
+          destinations,
+          categoryType,
+          days,
+          members,
+          budgetRange
+        }
+      };
+
+      await db.collection('tripPlans').add(tripData);
+      console.log('Trip plan stored successfully in Firestore');
+    } catch (error) {
+      console.error('Error storing trip plan in Firestore:', error);
+      // Note: We don't send this error to the frontend since we already sent the response
+    }
 
   } catch (error) {
     console.error('Error generating trip plan:', error);
@@ -98,4 +121,111 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
   }
 };
 
-module.exports = { generateTripPlan };
+const getTripPlansByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'User ID is required' });
+    }
+
+    const tripsSnapshot = await db.collection('tripPlans')
+      .where('userId', '==', userId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const trips = [];
+    tripsSnapshot.forEach(doc => {
+      trips.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    res.json({ 
+      success: true, 
+      trips,
+      count: trips.length
+    });
+  } catch (error) {
+    console.error('Error fetching user trip plans:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch user trip plans', 
+      details: error.message 
+    });
+  }
+};
+
+const getAllTripPlans = async (req, res) => {
+  try {
+    // Add pagination support
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const startAfter = req.query.startAfter; // For cursor-based pagination
+
+    let query = db.collection('tripPlans')
+      .orderBy('createdAt', 'desc')
+      .limit(limit);
+
+    // If startAfter cursor is provided, use it for pagination
+    if (startAfter) {
+      const startAfterDoc = await db.collection('tripPlans').doc(startAfter).get();
+      if (startAfterDoc.exists) {
+        query = query.startAfter(startAfterDoc);
+      }
+    } else {
+      // Skip documents for page-based pagination
+      query = query.offset((page - 1) * limit);
+    }
+
+    const tripsSnapshot = await query.get();
+
+    const trips = [];
+    let lastDocId = null;
+
+    tripsSnapshot.forEach(doc => {
+      // Remove sensitive information if needed
+      const tripData = doc.data();
+      trips.push({
+        id: doc.id,
+        tripTitle: tripData.tripTitle,
+        days: tripData.days,
+        searchParams: tripData.searchParams,
+        createdAt: tripData.createdAt,
+        userId: tripData.userId
+        // Add other fields as needed
+      });
+      lastDocId = doc.id;
+    });
+
+    // Get total count (Note: This is not recommended for large collections)
+    const totalSnapshot = await db.collection('tripPlans').count().get();
+
+    res.json({
+      success: true,
+      trips,
+      pagination: {
+        page,
+        limit,
+        total: totalSnapshot.data().count,
+        hasMore: trips.length === limit,
+        lastDocId // For cursor-based pagination
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching all trip plans:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch all trip plans', 
+      details: error.message 
+    });
+  }
+};
+
+module.exports = {
+  generateTripPlan,
+  getTripPlansByUserId,
+  getAllTripPlans
+};
+
