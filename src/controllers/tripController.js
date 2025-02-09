@@ -1,10 +1,28 @@
 const genAI = require('../config/geminiConfig');
 const { db } = require('../config/firebase');
 const admin = require('firebase-admin');
-
+const jwt = require('jsonwebtoken');
+const SECRET_KEY = process.env.SECRET_KEY;
 
 const generateTripPlan = async (req, res) => {
   try {
+    
+     // Extract token from Authorization header
+     const authHeader = req.headers.authorization;
+     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+       return res.status(401).json({ success: false, error: 'Authorization token required' });
+     }
+ 
+     const token = authHeader.split(' ')[1];
+     let userId;
+ 
+     try {
+       const decoded = jwt.verify(token, SECRET_KEY);
+       userId = decoded.userId; // Extract userId from the token
+     } catch (error) {
+       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+     }
+
     const { destinations, categoryType, days, members, budgetRange } = req.body;
 
     if (!destinations || !destinations.length) {
@@ -99,7 +117,7 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
       const tripData = {
         ...tripPlan,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        userId: req.user?.id || 'anonymous', // Assuming you have user authentication
+        userId, // Using userId from the token
         searchParams: {
           destinations,
           categoryType,
@@ -113,7 +131,6 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
       console.log('Trip plan stored successfully in Firestore');
     } catch (error) {
       console.error('Error storing trip plan in Firestore:', error);
-      // Note: We don't send this error to the frontend since we already sent the response
     }
 
   } catch (error) {
@@ -124,10 +141,20 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
 
 const getTripPlansByUserId = async (req, res) => {
   try {
-    const { userId } = req.params;
-    
-    if (!userId) {
-      return res.status(400).json({ success: false, error: 'User ID is required' });
+    // Extract token from Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    let userId;
+
+    try {
+      const decoded = jwt.verify(token, SECRET_KEY);
+      userId = decoded.userId;
+    } catch (error) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
 
     const tripsSnapshot = await db.collection('tripPlans')
