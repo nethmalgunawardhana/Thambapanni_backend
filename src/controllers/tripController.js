@@ -157,9 +157,9 @@ const getTripPlansByUserId = async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
 
+    // **Fix: Remove orderBy('createdAt', 'desc') to avoid composite index error**
     const tripsSnapshot = await db.collection('tripPlans')
       .where('userId', '==', userId)
-      .orderBy('createdAt', 'desc')
       .get();
 
     const trips = [];
