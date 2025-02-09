@@ -9,6 +9,7 @@ const user =require('./src/routes/userRoutes');
 const destinationRoutes = require('./src/routes/destinationRoutes');
 const guideRoutes = require('./src/routes/guideRoutes');
 const tripRoutes = require('./src/routes/tripRoutes');
+const imageRoutes = require('./src/routes/imageRoutes');
 const app = express();
 
 
@@ -24,6 +25,7 @@ app.use('/user',user);
 app.use('/destinations',destinationRoutes);
 app.use('/guides', guideRoutes);
 app.use('/api', tripRoutes);
+app.use('/images', imageRoutes);
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
