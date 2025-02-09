@@ -1,5 +1,6 @@
 const genAI = require('../config/geminiConfig');
 const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
 
 
 const generateTripPlan = async (req, res) => {
