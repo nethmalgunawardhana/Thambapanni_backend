@@ -187,8 +187,26 @@ const getTripPlansByUserId = async (req, res) => {
 
 const getAllTripPlans = async (req, res) => {
   try {
-    // No token verification - just fetch all trips
-    const tripsSnapshot = await db.collection('tripPlans').get();
+    // Extract token from Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    let userId;
+
+    try {
+      const decoded = jwt.verify(token, SECRET_KEY);
+      userId = decoded.userId;
+    } catch (error) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    }
+
+    // Fetch all trips where userId is not equal to the current user's ID
+    const tripsSnapshot = await db.collection('tripPlans')
+      .where('userId', '!=', userId)
+      .get();
     
     const trips = [];
     tripsSnapshot.forEach(doc => {
@@ -201,10 +219,10 @@ const getAllTripPlans = async (req, res) => {
 
     res.json({ success: true, trips });
   } catch (error) {
-    console.error('Error fetching all trip plans:', error);
+    console.error('Error fetching public trip plans:', error);
     res.status(500).json({ 
       success: false, 
-      error: 'Failed to fetch all trip plans'
+      error: 'Failed to fetch public trip plans'
     });
   }
 };
