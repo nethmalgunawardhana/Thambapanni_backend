@@ -193,7 +193,6 @@ const getAllTripPlans = async (req, res) => {
     const startAfter = req.query.startAfter; // For cursor-based pagination
 
     let query = db.collection('tripPlans')
-      .orderBy('createdAt', 'desc')
       .limit(limit);
 
     // If startAfter cursor is provided, use it for pagination
