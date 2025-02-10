@@ -190,65 +190,82 @@ const getAllTripPlans = async (req, res) => {
     // Add pagination support
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    const startAfter = req.query.startAfter; // For cursor-based pagination
-
+    
+    // Create a simple query without ordering
     let query = db.collection('tripPlans')
       .limit(limit);
 
-    // If startAfter cursor is provided, use it for pagination
-    if (startAfter) {
-      const startAfterDoc = await db.collection('tripPlans').doc(startAfter).get();
-      if (startAfterDoc.exists) {
-        query = query.startAfter(startAfterDoc);
+    // Add error logging to help debug
+    console.log('Query params:', { page, limit });
+
+    try {
+      // Simple offset-based pagination without cursor
+      if (page > 1) {
+        query = query.offset((page - 1) * limit);
       }
-    } else {
-      // Skip documents for page-based pagination
-      query = query.offset((page - 1) * limit);
+
+      const tripsSnapshot = await query.get();
+      
+      // Add debug logging
+      console.log('Query results:', {
+        empty: tripsSnapshot.empty,
+        size: tripsSnapshot.size
+      });
+
+      const trips = [];
+
+      tripsSnapshot.forEach(doc => {
+        const tripData = doc.data();
+        
+        // Validate data before adding to response
+        if (tripData && tripData.tripTitle) {
+          trips.push({
+            id: doc.id,
+            tripTitle: tripData.tripTitle,
+            days: tripData.days,
+            searchParams: tripData.searchParams,
+            createdAt: tripData.createdAt ? tripData.createdAt.toDate() : null,
+            userId: tripData.userId
+          });
+        } else {
+          console.warn('Invalid trip data found:', doc.id);
+        }
+      });
+
+      // Get total count
+      const totalCount = await db.collection('tripPlans').count().get();
+
+      res.json({
+        success: true,
+        trips,
+        pagination: {
+          page,
+          limit,
+          total: totalCount.data().count,
+          hasMore: trips.length === limit
+        },
+        debug: {
+          querySize: tripsSnapshot.size,
+          resultsReturned: trips.length
+        }
+      });
+
+    } catch (queryError) {
+      console.error('Query execution error:', queryError);
+      throw queryError;
     }
 
-    const tripsSnapshot = await query.get();
-
-    const trips = [];
-    let lastDocId = null;
-
-    tripsSnapshot.forEach(doc => {
-      // Remove sensitive information if needed
-      const tripData = doc.data();
-      trips.push({
-        id: doc.id,
-        tripTitle: tripData.tripTitle,
-        days: tripData.days,
-        searchParams: tripData.searchParams,
-        createdAt: tripData.createdAt,
-        userId: tripData.userId
-        // Add other fields as needed
-      });
-      lastDocId = doc.id;
-    });
-
-    // Get total count (Note: This is not recommended for large collections)
-    const totalSnapshot = await db.collection('tripPlans').count().get();
-
-    res.json({
-      success: true,
-      trips,
-      pagination: {
-        page,
-        limit,
-        total: totalSnapshot.data().count,
-        hasMore: trips.length === limit,
-        lastDocId // For cursor-based pagination
-      }
-    });
   } catch (error) {
     console.error('Error fetching all trip plans:', error);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to fetch all trip plans', 
-      details: error.message 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
+
 
 module.exports = {
   generateTripPlan,
