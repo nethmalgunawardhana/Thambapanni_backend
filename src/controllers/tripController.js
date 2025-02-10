@@ -187,24 +187,16 @@ const getTripPlansByUserId = async (req, res) => {
 
 const getAllTripPlans = async (req, res) => {
   try {
-    // Fetch all trip plans without pagination
+    // No token verification - just fetch all trips
     const tripsSnapshot = await db.collection('tripPlans').get();
     
     const trips = [];
-
     tripsSnapshot.forEach(doc => {
       const tripData = doc.data();
-      
-      if (tripData && tripData.tripTitle) {
-        trips.push({
-          id: doc.id,
-          tripTitle: tripData.tripTitle,
-          days: tripData.days,
-          searchParams: tripData.searchParams,
-          createdAt: tripData.createdAt ? tripData.createdAt.toDate() : null,
-          userId: tripData.userId
-        });
-      }
+      trips.push({
+        id: doc.id,
+        ...tripData
+      });
     });
 
     res.json({ success: true, trips });
@@ -212,8 +204,7 @@ const getAllTripPlans = async (req, res) => {
     console.error('Error fetching all trip plans:', error);
     res.status(500).json({ 
       success: false, 
-      error: 'Failed to fetch all trip plans', 
-      details: error.message 
+      error: 'Failed to fetch all trip plans'
     });
   }
 };
