@@ -202,3 +202,36 @@ exports.deleteLicensePDF = async (fileId) => {
     return false;
   }
 };
+
+
+exports.getVerifiedGuides = async (req, res) => {
+  try {
+    // Query Firestore for guides who are verified
+    const guidesRef = db.collection('guides').where('isVerified', '==', true);
+    const snapshot = await guidesRef.get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'No verified guides found.' });
+    }
+
+    // Map the guides to return only the required fields
+    const verifiedGuides = snapshot.docs.map(doc => {
+      const guide = doc.data();
+      return {
+        fullName: guide.fullName,
+        email: guide.email,
+        phone: guide.phone,
+        languages: guide.languages,
+        location: guide.location
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: verifiedGuides
+    });
+  } catch (error) {
+    console.error('Error fetching verified guides:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch verified guides.' });
+  }
+};
