@@ -4,24 +4,30 @@ const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = process.env.SECRET_KEY;
 
+// Helper function to generate a unique trip ID
+const generateTripId = () => {
+  const timestamp = Date.now().toString(36);
+  const randomStr = Math.random().toString(36).substring(2, 8);
+  return `TRIP-${timestamp}-${randomStr}`.toUpperCase();
+};
+
 const generateTripPlan = async (req, res) => {
   try {
-    
-     // Extract token from Authorization header
-     const authHeader = req.headers.authorization;
-     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-       return res.status(401).json({ success: false, error: 'Authorization token required' });
-     }
- 
-     const token = authHeader.split(' ')[1];
-     let userId;
- 
-     try {
-       const decoded = jwt.verify(token, SECRET_KEY);
-       userId = decoded.userId; // Extract userId from the token
-     } catch (error) {
-       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
-     }
+    // Extract token from Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    let userId;
+
+    try {
+      const decoded = jwt.verify(token, SECRET_KEY);
+      userId = decoded.userId; // Extract userId from the token
+    } catch (error) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    }
 
     const { destinations, categoryType, days, members, budgetRange } = req.body;
 
@@ -65,7 +71,7 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
     const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       generationConfig: {
-        maxOutputTokens: 2048, // Increase to ensure full response
+        maxOutputTokens: 2048,
         temperature: 0.7
       }
     });
@@ -89,14 +95,11 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
     };
 
     let responseText = await fetchAIResponse();
-
-    // **Fix: Remove markdown code block formatting**
     responseText = responseText.replace(/```json|```/g, "").trim();
 
-    // **Fix: Ensure JSON is complete**
     if (!responseText.endsWith("}")) {
       console.warn("Truncated JSON detected, attempting to fix...");
-      responseText += "}"; // Close the JSON if needed
+      responseText += "}";
     }
 
     let tripPlan;
@@ -111,13 +114,23 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
       return res.status(500).json({ success: false, error: 'Invalid trip plan structure', rawResponse: responseText });
     }
 
-    res.json({ success: true, tripPlan });
-    // Then store in Firestore
+    // Generate a unique trip ID
+    const tripId = generateTripId();
+
+    // Add tripId to the response
+    const tripPlanWithId = {
+      ...tripPlan,
+      tripId
+    };
+
+    res.json({ success: true, tripPlan: tripPlanWithId });
+
+    // Store in Firestore with tripId
     try {
       const tripData = {
-        ...tripPlan,
+        ...tripPlanWithId,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        userId, // Using userId from the token
+        userId,
         searchParams: {
           destinations,
           categoryType,
@@ -127,8 +140,9 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
         }
       };
 
-      await db.collection('tripPlans').add(tripData);
-      console.log('Trip plan stored successfully in Firestore');
+      // Use tripId as the document ID in Firestore
+      await db.collection('tripPlans').doc(tripId).set(tripData);
+      console.log('Trip plan stored successfully in Firestore with ID:', tripId);
     } catch (error) {
       console.error('Error storing trip plan in Firestore:', error);
     }
@@ -141,7 +155,6 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
 
 const getTripPlansByUserId = async (req, res) => {
   try {
-    // Extract token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'Authorization token required' });
@@ -157,7 +170,6 @@ const getTripPlansByUserId = async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    // **Fix: Remove orderBy('createdAt', 'desc') to avoid composite index error**
     const tripsSnapshot = await db.collection('tripPlans')
       .where('userId', '==', userId)
       .get();
@@ -187,7 +199,6 @@ const getTripPlansByUserId = async (req, res) => {
 
 const getAllTripPlans = async (req, res) => {
   try {
-    // Extract token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'Authorization token required' });
@@ -203,7 +214,6 @@ const getAllTripPlans = async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    // Fetch all trips where userId is not equal to the current user's ID
     const tripsSnapshot = await db.collection('tripPlans')
       .where('userId', '!=', userId)
       .get();
@@ -232,4 +242,3 @@ module.exports = {
   getTripPlansByUserId,
   getAllTripPlans
 };
-
