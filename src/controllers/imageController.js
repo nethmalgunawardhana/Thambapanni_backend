@@ -39,4 +39,4 @@ async function serveDestinationImage(req, res) {
   }
 }
 
-module.exports = { serveDestinationImage };
+module.exports = { serveDestinationImage,getDestinationImage };
