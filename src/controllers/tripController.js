@@ -2,7 +2,12 @@ const genAI = require('../config/geminiConfig');
 const { db } = require('../config/firebase');
 const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 const SECRET_KEY = process.env.SECRET_KEY;
+
+// Cache collection name in Firestore
+const CACHE_COLLECTION = 'locationCache';
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 
 // Helper function to generate a unique trip ID
 const generateTripId = () => {
@@ -11,9 +16,247 @@ const generateTripId = () => {
   return `TRIP-${timestamp}-${randomStr}`.toUpperCase();
 };
 
+// Helper function to check if cache entry is expired
+const isCacheExpired = (timestamp) => {
+  return Date.now() - timestamp > CACHE_TTL;
+};
+
+// Helper function to geocode place name to coordinates using Nominatim (OSM)
+async function geocode(placeName) {
+  const cacheKey = `geocode:${placeName}`;
+  
+  try {
+    // Check Firestore cache first
+    const cacheDoc = await db.collection(CACHE_COLLECTION).doc(cacheKey).get();
+    
+    if (cacheDoc.exists) {
+      const cacheData = cacheDoc.data();
+      if (!isCacheExpired(cacheData.timestamp)) {
+        return cacheData.data;
+      }
+      // Cache expired, delete it
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).delete();
+    }
+    
+    // Add 1-second delay to respect Nominatim usage policy
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: {
+        q: `${placeName}, Sri Lanka`,
+        format: 'json',
+        limit: 1
+      },
+      headers: {
+        'User-Agent': 'TripPlannerApp/1.0'
+      }
+    });
+    
+    if (response.data && response.data.length > 0) {
+      const result = {
+        lat: parseFloat(response.data[0].lat),
+        lon: parseFloat(response.data[0].lon),
+        displayName: response.data[0].display_name
+      };
+      
+      // Store in Firestore cache
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).set({
+        data: result,
+        timestamp: Date.now()
+      });
+      
+      return result;
+    }
+    
+    console.warn(`Could not geocode location: ${placeName}`);
+    return null;
+  } catch (error) {
+    console.error(`Error geocoding ${placeName}:`, error.message);
+    return null;
+  }
+}
+
+// Helper function to get driving distance between two points using OSRM
+async function getOSRMDistance(originCoords, destCoords) {
+  const cacheKey = `route:${originCoords.lat},${originCoords.lon}|${destCoords.lat},${destCoords.lon}`;
+  
+  try {
+    // Check Firestore cache first
+    const cacheDoc = await db.collection(CACHE_COLLECTION).doc(cacheKey).get();
+    
+    if (cacheDoc.exists) {
+      const cacheData = cacheDoc.data();
+      if (!isCacheExpired(cacheData.timestamp)) {
+        return cacheData.data;
+      }
+      // Cache expired, delete it
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).delete();
+    }
+    
+    const url = `https://router.project-osrm.org/route/v1/driving/${originCoords.lon},${originCoords.lat};${destCoords.lon},${destCoords.lat}?overview=false`;
+    
+    const response = await axios.get(url);
+    
+    if (response.data && 
+        response.data.routes && 
+        response.data.routes.length > 0) {
+      
+      const route = response.data.routes[0];
+      const distanceMeters = route.distance;
+      const durationSeconds = route.duration;
+      
+      const result = {
+        distanceValue: distanceMeters,
+        distanceText: `${Math.round(distanceMeters/100)/10} km`,
+        durationValue: durationSeconds,
+        durationText: `${Math.round(durationSeconds/60)} mins`
+      };
+      
+      // Store in Firestore cache
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).set({
+        data: result,
+        timestamp: Date.now()
+      });
+      
+      return result;
+    }
+    
+    console.warn(`Could not calculate route between coordinates`);
+    return null;
+  } catch (error) {
+    console.error(`Error calculating OSRM route:`, error.message);
+    return null;
+  }
+}
+
+// Helper function to calculate distances for the entire trip
+async function calculateTripDistance(tripPlan) {
+  try {
+    let totalDistanceMeters = 0;
+    const dailyDistances = [];
+    
+    // Process each day in the trip plan
+    for (let i = 0; i < tripPlan.days.length; i++) {
+      const day = tripPlan.days[i];
+      const activities = Array.isArray(day.activities) ? day.activities : [];
+      
+      // Extract all locations for this day
+      const locations = [];
+      
+      // Start from previous day's accommodation if available
+      if (i > 0 && tripPlan.days[i-1].accommodation) {
+        locations.push(tripPlan.days[i-1].accommodation);
+      }
+      
+      // Add all activity destinations
+      activities.forEach(activity => {
+        if (activity.destination) locations.push(activity.destination);
+      });
+      
+      // End with current day's accommodation
+      if (day.accommodation) locations.push(day.accommodation);
+      
+      // Calculate distances for this day
+      let dayDistanceMeters = 0;
+      const segments = [];
+      
+      // Must have at least 2 locations to calculate distance
+      if (locations.length >= 2) {
+        for (let j = 0; j < locations.length - 1; j++) {
+          // Geocode origin and destination
+          const originGeo = await geocode(locations[j]);
+          const destGeo = await geocode(locations[j+1]);
+          
+          if (originGeo && destGeo) {
+            const distanceData = await getOSRMDistance(originGeo, destGeo);
+            
+            if (distanceData) {
+              dayDistanceMeters += distanceData.distanceValue;
+              
+              segments.push({
+                from: locations[j],
+                to: locations[j+1],
+                distance: distanceData.distanceText,
+                duration: distanceData.durationText,
+                mode: 'driving'
+              });
+            } else {
+              segments.push({
+                from: locations[j],
+                to: locations[j+1],
+                error: 'Could not calculate distance'
+              });
+            }
+          } else {
+            segments.push({
+              from: locations[j],
+              to: locations[j+1],
+              error: 'Could not geocode one or both locations'
+            });
+          }
+        }
+      }
+      
+      // Add to total distance
+      totalDistanceMeters += dayDistanceMeters;
+      
+      // Add daily summary
+      dailyDistances.push({
+        day: day.day,
+        date: day.date,
+        distanceKm: Math.round((dayDistanceMeters / 1000) * 10) / 10,
+        distanceMeters: dayDistanceMeters,
+        segments: segments
+      });
+    }
+    
+    // Calculate total distance in kilometers
+    const totalDistanceKm = Math.round((totalDistanceMeters / 1000) * 10) / 10;
+    
+    return {
+      success: true,
+      totalDistanceKm,
+      totalDistanceMeters,
+      dailyBreakdown: dailyDistances
+    };
+    
+  } catch (error) {
+    console.error('Error calculating trip distance:', error);
+    return {
+      success: false,
+      error: 'Failed to calculate trip distance',
+      details: error.message
+    };
+  }
+}
+
+// Add a function to clean up expired cache entries
+async function cleanupExpiredCache() {
+  try {
+    const now = Date.now();
+    const snapshot = await db.collection(CACHE_COLLECTION).get();
+    
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      if (isCacheExpired(data.timestamp)) {
+        batch.delete(doc.ref);
+      }
+    });
+    
+    await batch.commit();
+  } catch (error) {
+    console.error('Error cleaning up cache:', error);
+  }
+}
+
+// Rest of the code remains the same...
 const generateTripPlan = async (req, res) => {
   try {
-    // Extract token from Authorization header
+    // Clean up expired cache entries before processing new request
+    await cleanupExpiredCache();
+    
+    // Original generateTripPlan code...
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'Authorization token required' });
@@ -24,7 +267,7 @@ const generateTripPlan = async (req, res) => {
 
     try {
       const decoded = jwt.verify(token, SECRET_KEY);
-      userId = decoded.userId; // Extract userId from the token
+      userId = decoded.userId;
     } catch (error) {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
@@ -114,21 +357,23 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
       return res.status(500).json({ success: false, error: 'Invalid trip plan structure', rawResponse: responseText });
     }
 
-    // Generate a unique trip ID
     const tripId = generateTripId();
-
-    // Add tripId to the response
     const tripPlanWithId = {
       ...tripPlan,
       tripId
     };
 
-    res.json({ success: true, tripPlan: tripPlanWithId });
+    const distanceInfo = await calculateTripDistance(tripPlanWithId);
+    const tripPlanWithDistance = {
+      ...tripPlanWithId,
+      distanceInfo
+    };
 
-    // Store in Firestore with tripId
+    res.json({ success: true, tripPlan: tripPlanWithDistance });
+
     try {
       const tripData = {
-        ...tripPlanWithId,
+        ...tripPlanWithDistance,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         userId,
         searchParams: {
@@ -140,7 +385,6 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
         }
       };
 
-      // Use tripId as the document ID in Firestore
       await db.collection('tripPlans').doc(tripId).set(tripData);
       console.log('Trip plan stored successfully in Firestore with ID:', tripId);
     } catch (error) {
