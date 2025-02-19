@@ -3,12 +3,11 @@ const { db } = require('../config/firebase');
 const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const NodeCache = require('node-cache');
 const SECRET_KEY = process.env.SECRET_KEY;
 
-
-// Setup cache with TTL of 7 days
-const distanceCache = new NodeCache({ stdTTL: 604800 });
+// Cache collection name in Firestore
+const CACHE_COLLECTION = 'locationCache';
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 
 // Helper function to generate a unique trip ID
 const generateTripId = () => {
@@ -17,15 +16,28 @@ const generateTripId = () => {
   return `TRIP-${timestamp}-${randomStr}`.toUpperCase();
 };
 
+// Helper function to check if cache entry is expired
+const isCacheExpired = (timestamp) => {
+  return Date.now() - timestamp > CACHE_TTL;
+};
+
 // Helper function to geocode place name to coordinates using Nominatim (OSM)
 async function geocode(placeName) {
   const cacheKey = `geocode:${placeName}`;
   
-  // Check cache first
-  const cached = distanceCache.get(cacheKey);
-  if (cached) return cached;
-  
   try {
+    // Check Firestore cache first
+    const cacheDoc = await db.collection(CACHE_COLLECTION).doc(cacheKey).get();
+    
+    if (cacheDoc.exists) {
+      const cacheData = cacheDoc.data();
+      if (!isCacheExpired(cacheData.timestamp)) {
+        return cacheData.data;
+      }
+      // Cache expired, delete it
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).delete();
+    }
+    
     // Add 1-second delay to respect Nominatim usage policy
     await new Promise(resolve => setTimeout(resolve, 1000));
     
@@ -36,7 +48,7 @@ async function geocode(placeName) {
         limit: 1
       },
       headers: {
-        'User-Agent': 'TripPlannerApp/1.0' // Required by Nominatim usage policy
+        'User-Agent': 'TripPlannerApp/1.0'
       }
     });
     
@@ -47,8 +59,11 @@ async function geocode(placeName) {
         displayName: response.data[0].display_name
       };
       
-      // Store in cache
-      distanceCache.set(cacheKey, result);
+      // Store in Firestore cache
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).set({
+        data: result,
+        timestamp: Date.now()
+      });
       
       return result;
     }
@@ -65,11 +80,19 @@ async function geocode(placeName) {
 async function getOSRMDistance(originCoords, destCoords) {
   const cacheKey = `route:${originCoords.lat},${originCoords.lon}|${destCoords.lat},${destCoords.lon}`;
   
-  // Check cache first
-  const cached = distanceCache.get(cacheKey);
-  if (cached) return cached;
-  
   try {
+    // Check Firestore cache first
+    const cacheDoc = await db.collection(CACHE_COLLECTION).doc(cacheKey).get();
+    
+    if (cacheDoc.exists) {
+      const cacheData = cacheDoc.data();
+      if (!isCacheExpired(cacheData.timestamp)) {
+        return cacheData.data;
+      }
+      // Cache expired, delete it
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).delete();
+    }
+    
     const url = `https://router.project-osrm.org/route/v1/driving/${originCoords.lon},${originCoords.lat};${destCoords.lon},${destCoords.lat}?overview=false`;
     
     const response = await axios.get(url);
@@ -89,8 +112,11 @@ async function getOSRMDistance(originCoords, destCoords) {
         durationText: `${Math.round(durationSeconds/60)} mins`
       };
       
-      // Store in cache
-      distanceCache.set(cacheKey, result);
+      // Store in Firestore cache
+      await db.collection(CACHE_COLLECTION).doc(cacheKey).set({
+        data: result,
+        timestamp: Date.now()
+      });
       
       return result;
     }
@@ -152,7 +178,7 @@ async function calculateTripDistance(tripPlan) {
                 to: locations[j+1],
                 distance: distanceData.distanceText,
                 duration: distanceData.durationText,
-                mode: 'driving' // OSRM provides driving directions
+                mode: 'driving'
               });
             } else {
               segments.push({
@@ -204,10 +230,33 @@ async function calculateTripDistance(tripPlan) {
   }
 }
 
+// Add a function to clean up expired cache entries
+async function cleanupExpiredCache() {
+  try {
+    const now = Date.now();
+    const snapshot = await db.collection(CACHE_COLLECTION).get();
+    
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      if (isCacheExpired(data.timestamp)) {
+        batch.delete(doc.ref);
+      }
+    });
+    
+    await batch.commit();
+  } catch (error) {
+    console.error('Error cleaning up cache:', error);
+  }
+}
 
+// Rest of the code remains the same...
 const generateTripPlan = async (req, res) => {
   try {
-    // Extract token from Authorization header
+    // Clean up expired cache entries before processing new request
+    await cleanupExpiredCache();
+    
+    // Original generateTripPlan code...
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'Authorization token required' });
@@ -218,7 +267,7 @@ const generateTripPlan = async (req, res) => {
 
     try {
       const decoded = jwt.verify(token, SECRET_KEY);
-      userId = decoded.userId; // Extract userId from the token
+      userId = decoded.userId;
     } catch (error) {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
@@ -308,28 +357,20 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
       return res.status(500).json({ success: false, error: 'Invalid trip plan structure', rawResponse: responseText });
     }
 
-    // Generate a unique trip ID
     const tripId = generateTripId();
-
-    // Add tripId to the response
     const tripPlanWithId = {
       ...tripPlan,
       tripId
     };
 
-   // Calculate distance information using free OSRM
-   const distanceInfo = await calculateTripDistance(tripPlanWithId);
-    
-   // Add distance info to the trip plan
-   const tripPlanWithDistance = {
-     ...tripPlanWithId,
-     distanceInfo
-   };
+    const distanceInfo = await calculateTripDistance(tripPlanWithId);
+    const tripPlanWithDistance = {
+      ...tripPlanWithId,
+      distanceInfo
+    };
 
-   // Send response with distance info
-   res.json({ success: true, tripPlan: tripPlanWithDistance });
+    res.json({ success: true, tripPlan: tripPlanWithDistance });
 
-    // Store in Firestore with tripId
     try {
       const tripData = {
         ...tripPlanWithDistance,
@@ -344,7 +385,6 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
         }
       };
 
-      // Use tripId as the document ID in Firestore
       await db.collection('tripPlans').doc(tripId).set(tripData);
       console.log('Trip plan stored successfully in Firestore with ID:', tripId);
     } catch (error) {
