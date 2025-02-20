@@ -124,7 +124,7 @@ const bookmarkController = {
   getBookmarkedTrips: async (req, res) => {
     try {
       const bookmarksRef = db.collection('bookmarks');
-      const tripsRef = db.collection('trips');
+      const tripsRef = db.collection('tripPlans');
       
       const bookmarksSnapshot = await bookmarksRef
         .where('userId', '==', req.userId)
