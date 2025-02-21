@@ -15,12 +15,9 @@ const trendingRoutes = require('./src/routes/trendingRoutes');
 const bookmarkRoutes = require('./src/routes/bookmarkroutes');
 const app = express();
 
-
-
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
-
 
 // Routes
 app.use('/auth', authRoutes); // All auth routes will be prefixed with /auth
