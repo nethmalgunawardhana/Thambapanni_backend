@@ -11,6 +11,10 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 const SENDGRID_TEMPLATE_ID = process.env.SENDGRID_TEMPLATE_ID_3;
 const SECRET_KEY = process.env.SECRET_KEY;
 
+const GUIDE_CONFIRMATION_TEMPLATE_ID = process.env.SENDGRID_TEMPLATE_ID_GUIDE_CONFIRMATION;
+const USER_NOTIFICATION_TEMPLATE_ID_1 = process.env.SENDGRID_TEMPLATE_ID_USER_NOTIFICATION_1;
+const USER_NOTIFICATION_TEMPLATE_ID_2 = process.env.SENDGRID_TEMPLATE_ID_USER_NOTIFICATION_2;
+
 // ImageKit setup
 const imagekit = new ImageKit({
   publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
@@ -69,6 +73,7 @@ exports.submitGuideApplication = (req, res) => {
       const guideRef = db.collection('guides').doc();
 
       await guideRef.set({
+        id: guideRef.id, // Add the auto-generated Firestore document ID
         fullName,
         email,
         phone,
@@ -79,6 +84,7 @@ exports.submitGuideApplication = (req, res) => {
         fileId: imageKitResponse.fileId,
         isVerified: false,
         status: 'pending',
+        pricePerKm: 0.5, 
         createdAt: new Date().toISOString(),
       });
 
@@ -218,11 +224,13 @@ exports.getVerifiedGuides = async (req, res) => {
     const verifiedGuides = snapshot.docs.map(doc => {
       const guide = doc.data();
       return {
+        id: guide.id,
         fullName: guide.fullName,
         email: guide.email,
         phone: guide.phone,
         languages: guide.languages,
-        location: guide.location
+        location: guide.location,
+        pricePerKm: guide.pricePerKm
       };
     });
 
@@ -233,5 +241,202 @@ exports.getVerifiedGuides = async (req, res) => {
   } catch (error) {
     console.error('Error fetching verified guides:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch verified guides.' });
+  }
+};
+
+exports.confirmGuideRequest = async (req, res) => {
+  try {
+    const { tripId, guideId, tripDetails, guidePrice, token } = req.body;
+
+    // Validate the request
+    if (!tripId || !guideId || !token) {
+      console.error('Missing required fields:', { tripId, guideId, token });
+      return res.status(400).json({ success: false, message: 'Missing required fields.' });
+    }
+
+    // Save the confirmation request to Firestore
+    const confirmationRef = db.collection('guideConfirmations').doc();
+    await confirmationRef.set({
+      tripId,
+      guideId,
+      userId: req.user.userId, // Assuming you have user authentication middleware
+      status: 'pending',
+      guidePrice,
+      createdAt: new Date().toISOString(),
+      tripDetails,
+    });
+    console.log('Confirmation request saved to Firestore:', confirmationRef.id);
+
+    // Get guide information
+    const guideDoc = await db.collection('guides').doc(guideId).get();
+    if (!guideDoc.exists) {
+      console.error('Guide not found:', guideId);
+      return res.status(404).json({ success: false, message: 'Guide not found.' });
+    }
+    const guideData = guideDoc.data();
+    console.log('Guide data:', guideData);
+
+    // Generate confirmation token
+    const confirmationToken = jwt.sign(
+      { confirmationId: confirmationRef.id },
+      process.env.SECRET_KEY,
+      { expiresIn: '24h' }
+    );
+    console.log('Confirmation token generated:', confirmationToken);
+
+    // Create confirmation and rejection URLs
+    const confirmUrl = `${req.protocol}://${req.get('host')}/guides/guide-response?token=${confirmationToken}&action=confirm`;
+    const rejectUrl = `${req.protocol}://${req.get('host')}/guides/guide-response?token=${confirmationToken}&action=reject`;
+    console.log('Confirmation URL:', confirmUrl);
+    console.log('Rejection URL:', rejectUrl);
+
+    // Send email to guide
+    const msg = {
+      to: guideData.email,
+      from: process.env.MAIL_NAME,
+      templateId: GUIDE_CONFIRMATION_TEMPLATE_ID,
+      dynamicTemplateData: {
+        guideName: guideData.fullName,
+        tripDetails: tripDetails,
+        guidePrice: `$${guidePrice.toFixed(2)}`,
+        confirmUrl,
+        rejectUrl,
+      },
+    };
+    console.log('Sending email to guide:', guideData.email);
+
+    await sgMail.send(msg);
+    console.log('Email sent successfully.');
+
+    res.status(200).json({ success: true, message: 'Guide confirmation request sent successfully.' });
+  } catch (error) {
+    console.error('Error confirming guide:', error);
+    res.status(500).json({ success: false, message: 'Failed to confirm guide.' });
+  }
+};
+
+exports.handleGuideResponse = async (req, res) => {
+  const { token, action } = req.query;
+
+  try {
+      const decoded = jwt.verify(token, SECRET_KEY);
+      const { confirmationId } = decoded;
+
+      const confirmationRef = db.collection('guideConfirmations').doc(confirmationId);
+      const confirmationDoc = await confirmationRef.get();
+
+      if (!confirmationDoc.exists) {
+          return res.status(404).json({
+              success: false,
+              message: 'Confirmation request not found'
+          });
+      }
+
+      const confirmationData = confirmationDoc.data();
+
+      // Get user and guide information
+      const userDoc = await db.collection('users').doc(confirmationData.userId).get();
+      const guideDoc = await db.collection('guides').doc(confirmationData.guideId).get();
+
+      const userData = userDoc.data();
+      const guideData = guideDoc.data();
+
+      if (action === 'confirm') {
+          await confirmationRef.update({
+              status: 'confirmed',
+              respondedAt: new Date().toISOString()
+          });
+
+          // Send confirmation email to user
+          const userMsg = {
+              to: userData.email,
+              from: process.env.MAIL_NAME,
+              templateId: USER_NOTIFICATION_TEMPLATE_ID_1,
+              dynamicTemplateData: {
+                  userName: userData.displayName,
+                  guideName: guideData.fullName,
+                  status: 'confirmed',
+                  message: 'Your guide has confirmed the trip request. You can now proceed with the payment.'
+              }
+          };
+
+          await sgMail.send(userMsg);
+          res.send('You have successfully confirmed the guide request.');
+
+      } else if (action === 'reject') {
+          await confirmationRef.update({
+              status: 'rejected',
+              respondedAt: new Date().toISOString()
+          });
+
+          // Send rejection email to user
+          const userMsg = {
+              to: userData.email,
+              from: process.env.MAIL_NAME,
+              templateId: USER_NOTIFICATION_TEMPLATE_ID_2,
+              dynamicTemplateData: {
+                  userName: userData.displayName,
+                  guideName: guideData.fullName,
+                  status: 'rejected',
+                  message: 'Unfortunately, your guide has rejected the trip request. Please try selecting another guide.'
+              }
+          };
+
+          await sgMail.send(userMsg);
+          res.send('You have rejected the guide request.');
+      }
+
+  } catch (error) {
+      console.error('Error handling guide response:', error);
+      res.status(500).json({
+          success: false,
+          message: 'Failed to process guide response'
+      });
+  }
+};
+
+exports.getGuideConfirmationStatus = async (req, res) => {
+  const { tripId } = req.params;
+  console.log('Fetching confirmation status for tripId:', tripId);
+
+  try {
+    const confirmationsRef = db.collection('guideConfirmations')
+      .where('tripId', '==', tripId)
+      .orderBy('createdAt', 'desc')
+      .limit(1);
+
+    const snapshot = await confirmationsRef.get();
+   
+
+    if (snapshot.empty) {
+      console.log('No confirmation request found for tripId:', tripId);
+      return res.status(404).json({
+        success: false,
+        message: 'No confirmation request found for this trip.'
+      });
+    }
+
+    const confirmationData = snapshot.docs[0].data();
+    const { status } = confirmationData;
+
+    // Define a user-friendly message based on the status
+    let message = 'Confirmation status is pending.';
+    if (status === 'confirmed') message = 'The guide has confirmed the trip.';
+    if (status === 'rejected') message = 'The guide has rejected the trip.';
+    if (status === 'expired') message = 'The confirmation request has expired.';
+
+    res.status(200).json({
+      success: true,
+      status,
+      message,
+      updatedAt: confirmationData.respondedAt || confirmationData.createdAt
+    });
+
+  } catch (error) {
+    console.error('Error fetching guide confirmation status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch guide confirmation status.'
+    });
   }
 };
