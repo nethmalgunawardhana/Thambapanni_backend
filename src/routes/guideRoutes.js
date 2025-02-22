@@ -10,18 +10,10 @@ const {
 const { getApplicationStatus } = require('../controllers/guideController');
 const upload = require('../middleware/upload');
 const { verifyToken } = require('../middleware/authMiddleware');
-const RateLimit = require('express-rate-limit');
+
 const router = express.Router();
 
-// Set up rate limiter: maximum of 100 requests per 15 minutes
-const limiter = RateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // max 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again after 15 minutes',
-});
 
-// Apply rate limiting to all routes
-router.use(limiter);
 
 // POST /api/guides/apply
 router.post('/apply', verifyToken, submitGuideApplication);
