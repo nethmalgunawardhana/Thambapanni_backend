@@ -12,7 +12,7 @@ function generatePlaceSummary(place, description) {
       const response = await result.response;
       resolve(response.text());
     } catch (error) {
-      console.error(`Error generating summary for ${place}:`, error);
+      //console.error(`Error generating summary for ${place}:`, error);
       resolve(description); // Fallback to original description on error
     }
   });
