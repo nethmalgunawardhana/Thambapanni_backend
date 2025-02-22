@@ -244,6 +244,77 @@ exports.getVerifiedGuides = async (req, res) => {
   }
 };
 
+// tripFormatter.js
+const formatTripDetails = (tripData) => {
+  if (!tripData || typeof tripData !== 'object') {
+    return 'Trip details not available';
+  }
+
+  const formatCurrency = (price) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(price);
+  };
+
+  const formatDate = (dateStr) => {
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  // Format daily itinerary
+  const formatDayActivities = (activities) => {
+    if (!Array.isArray(activities)) return '';
+    return activities
+      .map(activity => {
+        if (!activity.time || !activity.description || !activity.destination) return '';
+        return `
+          <div class="activity-item">
+            <span class="activity-time">${activity.time}</span>
+            <span class="activity-desc">${activity.description}</span>
+            <span class="activity-dest">${activity.destination}</span>
+          </div>`;
+      })
+      .join('');
+  };
+
+  const dayDetailsHTML = tripData.days.map((day, index) => `
+    <div class="day-container">
+      <h3>Day ${index + 1} - ${formatDate(day.date)}</h3>
+      <div class="day-details">
+        <p><strong>Transportation:</strong> ${day.transportation}</p>
+        <p><strong>Accommodation:</strong> ${day.accommodation || 'Not specified'}</p>
+        <div class="activities-container">
+          <p><strong>Activities:</strong></p>
+          ${formatDayActivities(day.activities)}
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="trip-summary">
+      <h2>Trip Overview</h2>
+      <ul>
+        <li><strong>Trip ID:</strong> ${tripData.tripId}</li>
+        <li><strong>Title:</strong> ${tripData.tripTitle}</li>
+        <li><strong>Duration:</strong> ${tripData.days.length} days</li>
+        <li><strong>Number of Travelers:</strong> ${tripData.searchParams.members}</li>
+        <li><strong>Budget Range:</strong> ${tripData.searchParams.budgetRange}</li>
+        <li><strong>Total Distance:</strong> ${Math.round(tripData.distanceInfo.totalDistanceKm)} km</li>
+      </ul>
+    </div>
+    <div class="itinerary-section">
+      <h2>Detailed Itinerary</h2>
+      ${dayDetailsHTML}
+    </div>`;
+};
+
+// guideController.js
 exports.confirmGuideRequest = async (req, res) => {
   try {
     const { tripId, guideId, tripDetails, guidePrice, token } = req.body;
@@ -259,22 +330,19 @@ exports.confirmGuideRequest = async (req, res) => {
     await confirmationRef.set({
       tripId,
       guideId,
-      userId: req.user.userId, // Assuming you have user authentication middleware
+      userId: req.user.userId,
       status: 'pending',
       guidePrice,
       createdAt: new Date().toISOString(),
       tripDetails,
     });
-    console.log('Confirmation request saved to Firestore:', confirmationRef.id);
 
     // Get guide information
     const guideDoc = await db.collection('guides').doc(guideId).get();
     if (!guideDoc.exists) {
-      console.error('Guide not found:', guideId);
       return res.status(404).json({ success: false, message: 'Guide not found.' });
     }
     const guideData = guideDoc.data();
-    console.log('Guide data:', guideData);
 
     // Generate confirmation token
     const confirmationToken = jwt.sign(
@@ -282,13 +350,13 @@ exports.confirmGuideRequest = async (req, res) => {
       process.env.SECRET_KEY,
       { expiresIn: '24h' }
     );
-    console.log('Confirmation token generated:', confirmationToken);
 
-    // Create confirmation and rejection URLs
-    const confirmUrl = `${req.protocol}://${req.get('host')}/guides/guide-response?token=${confirmationToken}&action=confirm`;
-    const rejectUrl = `${req.protocol}://${req.get('host')}/guides/guide-response?token=${confirmationToken}&action=reject`;
-    console.log('Confirmation URL:', confirmUrl);
-    console.log('Rejection URL:', rejectUrl);
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const confirmUrl = `${baseUrl}/guides/guide-response?token=${confirmationToken}&action=confirm`;
+    const rejectUrl = `${baseUrl}/guides/guide-response?token=${confirmationToken}&action=reject`;
+
+    // Format trip details
+    const formattedTripDetails = formatTripDetails(tripDetails);
 
     // Send email to guide
     const msg = {
@@ -297,24 +365,20 @@ exports.confirmGuideRequest = async (req, res) => {
       templateId: GUIDE_CONFIRMATION_TEMPLATE_ID,
       dynamicTemplateData: {
         guideName: guideData.fullName,
-        tripDetails: tripDetails,
+        tripDetails: formattedTripDetails,
         guidePrice: `$${guidePrice.toFixed(2)}`,
         confirmUrl,
         rejectUrl,
       },
     };
-    console.log('Sending email to guide:', guideData.email);
 
     await sgMail.send(msg);
-    console.log('Email sent successfully.');
-
     res.status(200).json({ success: true, message: 'Guide confirmation request sent successfully.' });
   } catch (error) {
     console.error('Error confirming guide:', error);
     res.status(500).json({ success: false, message: 'Failed to confirm guide.' });
   }
 };
-
 exports.handleGuideResponse = async (req, res) => {
   const { token, action } = req.query;
 
