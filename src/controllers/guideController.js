@@ -230,7 +230,8 @@ exports.getVerifiedGuides = async (req, res) => {
         phone: guide.phone,
         languages: guide.languages,
         location: guide.location,
-        pricePerKm: guide.pricePerKm
+        pricePerKm: guide.pricePerKm,
+        trips: guide.trips
       };
     });
 
