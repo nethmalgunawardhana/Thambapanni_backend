@@ -1,5 +1,5 @@
 const express = require('express');
-const { createPaymentIntent ,handlePaymentSuccess,getUserPayments } = require('../controllers/paymentController');
+const { createPaymentIntent ,handlePaymentSuccess,getPaymentHistory  } = require('../controllers/paymentController');
 
 const router = express.Router();
 
@@ -8,7 +8,7 @@ router.post('/create-payment-intent', createPaymentIntent);
 router.post('/handle-success', handlePaymentSuccess);
 
 // Get user payment history
-router.get('/history', getUserPayments);
+router.get('/history', getPaymentHistory );
 
 
 module.exports = router;
