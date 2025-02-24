@@ -1,5 +1,5 @@
 const { stripe } = require('../config/stripe');
-const { db } = require('../config/firebase');
+const { db, admin } = require('../config/firebase');
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = process.env.SECRET_KEY;
 exports.createPaymentIntent = async (req, res) => {
