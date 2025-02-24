@@ -109,7 +109,7 @@ exports.handlePaymentSuccess = async (req, res) => {
     const paymentRef = await db.collection('payments').add(paymentRecord);
     
     // Also update the trip document to mark it as paid
-    await db.collection('trips').doc(tripId).update({
+    await db.collection('tripPlans').doc(tripId).update({
       paymentStatus: 'paid',
       paymentId: paymentRef.id,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
