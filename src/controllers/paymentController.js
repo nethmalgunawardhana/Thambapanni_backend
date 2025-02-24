@@ -45,16 +45,24 @@ exports.createPaymentIntent = async (req, res) => {
       return res.status(403).json({ success: false, error: 'You do not have permission to pay for this trip' });
     }
 
+    // Generate a unique idempotency key to prevent duplicate payment intents
+    const idempotencyKey = `trip_payment_${tripId}_${userId}_${Date.now()}`;
+
     // Create a new Stripe customer (for storing payment details)
-    const customer = await stripe.customers.create();
+    const customer = await stripe.customers.create({
+      idempotencyKey: `customer_${idempotencyKey}`
+    });
 
     // Create an ephemeral key for the customer
     const ephemeralKey = await stripe.ephemeralKeys.create(
       { customer: customer.id },
-      { apiVersion: '2023-10-16' }
+      { 
+        apiVersion: '2023-10-16',
+        idempotencyKey: `ephemeral_${idempotencyKey}`
+      }
     );
 
-    // Create a payment intent
+    // Create a payment intent with idempotency key
     const paymentIntent = await stripe.paymentIntents.create({
       amount,
       currency: 'usd',
@@ -63,13 +71,21 @@ exports.createPaymentIntent = async (req, res) => {
       metadata: { 
         tripId, 
         userId,
-        appReference: `trip_payment_${tripId}_${userId}_${Date.now()}`
+        appReference: idempotencyKey
       },
+      idempotencyKey: idempotencyKey
+    });
+
+    // Also update trip with pending payment status
+    await db.collection('tripPlans').doc(tripId).update({
+      paymentStatus: 'pending',
+      paymentIntentId: paymentIntent.id,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
     res.json({
       paymentIntent: paymentIntent.client_secret,
-      paymentIntentId: paymentIntent.id, // Send the raw ID to the client
+      paymentIntentId: paymentIntent.id,
       ephemeralKey: ephemeralKey.secret,
       customer: customer.id,
       success: true
@@ -86,7 +102,8 @@ exports.createPaymentIntent = async (req, res) => {
 
 // Handle successful payments and store in Firestore
 exports.handlePaymentSuccess = async (req, res) => {
-  let transaction = null;
+  let transactionAttempt = 0;
+  const maxTransactionAttempts = 5;
   
   try {
     // Extract user ID from JWT token
@@ -120,21 +137,6 @@ exports.handlePaymentSuccess = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid amount' });
     }
     
-    // Check if payment was already recorded to prevent duplicates
-    const existingPayments = await db.collection('payments')
-      .where('paymentIntentId', '==', paymentIntentId)
-      .get();
-    
-    if (!existingPayments.empty) {
-      // Payment already recorded, return the existing payment ID
-      const existingPayment = existingPayments.docs[0];
-      return res.json({
-        success: true,
-        message: 'Payment was already recorded',
-        paymentId: existingPayment.id
-      });
-    }
-    
     // Verify the payment with Stripe to ensure it was successful
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
     
@@ -146,52 +148,47 @@ exports.handlePaymentSuccess = async (req, res) => {
       });
     }
     
-    // Verify the trip exists
-    const tripRef = db.collection('tripPlans').doc(tripId);
-    const tripDoc = await tripRef.get();
+    // Using a while loop for transaction retries
+    let result;
+    let lastError;
     
-    if (!tripDoc.exists) {
-      return res.status(404).json({ success: false, error: 'Trip not found' });
+    while (transactionAttempt < maxTransactionAttempts) {
+      try {
+        // Attempt the transaction
+        result = await executePaymentTransaction(paymentIntentId, tripId, userId, amount, paymentIntent);
+        
+        // If we get here, transaction succeeded
+        break;
+      } catch (error) {
+        lastError = error;
+        console.error(`Transaction attempt ${transactionAttempt + 1} failed:`, error);
+        
+        // Check if it's a transaction specific error that merits retry
+        if (error.code === 'ALREADY_EXISTS') {
+          // This is a success case - payment was already recorded
+          return res.json({
+            success: true,
+            message: 'Payment was already recorded',
+            paymentId: error.paymentId
+          });
+        }
+        
+        // Increment attempt counter
+        transactionAttempt++;
+        
+        // If we haven't reached max attempts, wait and try again
+        if (transactionAttempt < maxTransactionAttempts) {
+          // Exponential backoff with jitter
+          const backoffTime = Math.floor(Math.random() * 1000) + (1000 * Math.pow(2, transactionAttempt));
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+        }
+      }
     }
     
-    // Create payment record in Firestore using a transaction for atomic operations
-    transaction = db.runTransaction(async (t) => {
-      // Create payment record
-      const paymentRecord = {
-        paymentIntentId,
-        tripId,
-        userId,
-        amount: amount / 100, // Convert cents to dollars for display
-        amountInCents: amount,
-        status: 'completed',
-        paymentMethod: paymentIntent.payment_method_types[0] || 'card',
-        currency: paymentIntent.currency,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        metadata: paymentIntent.metadata || {},
-        stripeResponse: {
-          status: paymentIntent.status,
-          created: paymentIntent.created,
-          id: paymentIntent.id
-        }
-      };
-      
-      // Create a reference for the new payment document
-      const paymentRef = db.collection('payments').doc();
-      
-      // Set the payment document in the transaction
-      t.set(paymentRef, paymentRecord);
-      
-      // Also update the trip document to mark it as paid
-      t.update(tripRef, {
-        paymentStatus: 'paid',
-        paymentId: paymentRef.id,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
-      return { paymentId: paymentRef.id };
-    });
-    
-    const result = await transaction;
+    // If we exited the loop without a result, throw the last error
+    if (!result) {
+      throw lastError || new Error(`Transaction failed after ${maxTransactionAttempts} attempts`);
+    }
     
     // Log successful payment recording
     console.log(`Payment recorded successfully: ${result.paymentId} for trip ${tripId}`);
@@ -204,19 +201,93 @@ exports.handlePaymentSuccess = async (req, res) => {
   } catch (error) {
     console.error('Error recording payment:', error);
     
-    // If there was a transaction in progress, we might want to retry
-    if (transaction) {
-      console.error('Transaction failed. Consider implementing retry logic here.');
-    }
-    
     res.status(500).json({ 
       success: false, 
       error: 'Failed to record payment information',
       message: error.message || 'An unknown error occurred',
-      shouldRetry: true
+      shouldRetry: transactionAttempt < maxTransactionAttempts - 1
     });
   }
 };
+
+// Helper function for payment transaction
+async function executePaymentTransaction(paymentIntentId, tripId, userId, amount, paymentIntent) {
+  // First, check if payment was already recorded outside the transaction
+  // This is a performance optimization to avoid starting a transaction if not needed
+  const existingPaymentsQuery = await db.collection('payments')
+    .where('paymentIntentId', '==', paymentIntentId)
+    .limit(1)
+    .get();
+  
+  if (!existingPaymentsQuery.empty) {
+    // Payment already exists, return the ID but signal this was pre-existing
+    const existingPayment = existingPaymentsQuery.docs[0];
+    const error = new Error('Payment already recorded');
+    error.code = 'ALREADY_EXISTS';
+    error.paymentId = existingPayment.id;
+    throw error;
+  }
+
+  // Verify the trip exists
+  const tripRef = db.collection('tripPlans').doc(tripId);
+  const tripDoc = await tripRef.get();
+  
+  if (!tripDoc.exists) {
+    throw new Error(`Trip not found: ${tripId}`);
+  }
+  
+  // Create payment record in Firestore using a transaction for atomic operations
+  return db.runTransaction(async (t) => {
+    // Double-check inside transaction if payment already exists
+    const existingPaymentsRef = db.collection('payments')
+      .where('paymentIntentId', '==', paymentIntentId)
+      .limit(1);
+    
+    const existingPayments = await t.get(existingPaymentsRef);
+    
+    if (!existingPayments.empty) {
+      // Payment already exists, return the ID
+      const existingPayment = existingPayments.docs[0];
+      return { paymentId: existingPayment.id, alreadyExists: true };
+    }
+    
+    // Create payment record
+    const paymentRecord = {
+      paymentIntentId,
+      tripId,
+      userId,
+      amount: amount / 100, // Convert cents to dollars for display
+      amountInCents: amount,
+      status: 'completed',
+      paymentMethod: paymentIntent.payment_method_types[0] || 'card',
+      currency: paymentIntent.currency,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      metadata: paymentIntent.metadata || {},
+      stripeResponse: {
+        status: paymentIntent.status,
+        created: paymentIntent.created,
+        id: paymentIntent.id
+      },
+      recordedBy: 'api_endpoint'
+    };
+    
+    // Create a reference for the new payment document
+    const paymentRef = db.collection('payments').doc();
+    
+    // Set the payment document in the transaction
+    t.set(paymentRef, paymentRecord);
+    
+    // Also update the trip document to mark it as paid
+    t.update(tripRef, {
+      paymentStatus: 'paid',
+      paymentId: paymentRef.id,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    return { paymentId: paymentRef.id };
+  });
+}
 
 // Function to get payment history for a user
 exports.getPaymentHistory = async (req, res) => {
@@ -249,7 +320,8 @@ exports.getPaymentHistory = async (req, res) => {
       payments.push({
         id: doc.id,
         ...doc.data(),
-        createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null
+        createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null,
+        updatedAt: doc.data().updatedAt ? doc.data().updatedAt.toDate() : null
       });
     });
     
@@ -334,100 +406,148 @@ exports.handleStripeWebhook = async (req, res) => {
 
 // Helper function to handle successful payment intents from webhook
 async function handlePaymentIntentSucceeded(paymentIntent) {
-  try {
-    // Extract metadata
-    const { tripId, userId } = paymentIntent.metadata;
-    
-    if (!tripId || !userId) {
-      console.error('Missing required metadata in payment intent:', paymentIntent.id);
-      return;
-    }
-    
-    // Check if we've already processed this payment
-    const existingPayments = await db.collection('payments')
-      .where('paymentIntentId', '==', paymentIntent.id)
-      .get();
-    
-    if (!existingPayments.empty) {
-      console.log(`Payment ${paymentIntent.id} already processed. Skipping.`);
-      return;
-    }
-    
-    // Verify the trip exists
-    const tripRef = db.collection('tripPlans').doc(tripId);
-    const tripDoc = await tripRef.get();
-    
-    if (!tripDoc.exists) {
-      console.error(`Trip ${tripId} not found for payment ${paymentIntent.id}`);
-      return;
-    }
-    
-    // Create payment record
-    const paymentRecord = {
-      paymentIntentId: paymentIntent.id,
-      tripId,
-      userId,
-      amount: paymentIntent.amount / 100,
-      amountInCents: paymentIntent.amount,
-      status: 'completed',
-      paymentMethod: paymentIntent.payment_method_types[0] || 'card',
-      currency: paymentIntent.currency,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      metadata: paymentIntent.metadata || {},
-      stripeResponse: {
-        status: paymentIntent.status,
-        created: paymentIntent.created,
-        id: paymentIntent.id
-      },
-      source: 'webhook'
-    };
-    
-    // Use a transaction for atomic operations
-    await db.runTransaction(async (t) => {
-      // Create a reference for the new payment document
-      const paymentRef = db.collection('payments').doc();
+  let retryCount = 0;
+  const maxRetries = 5;
+  
+  while (retryCount < maxRetries) {
+    try {
+      // Extract metadata
+      const { tripId, userId } = paymentIntent.metadata;
       
-      // Set the payment document in the transaction
-      t.set(paymentRef, paymentRecord);
+      if (!tripId || !userId) {
+        console.error('Missing required metadata in payment intent:', paymentIntent.id);
+        return;
+      }
       
-      // Update the trip document to mark it as paid
-      t.update(tripRef, {
-        paymentStatus: 'paid',
-        paymentId: paymentRef.id,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      // Check if we've already processed this payment outside transaction
+      const existingPaymentsQuery = await db.collection('payments')
+        .where('paymentIntentId', '==', paymentIntent.id)
+        .limit(1)
+        .get();
+      
+      if (!existingPaymentsQuery.empty) {
+        console.log(`Payment ${paymentIntent.id} already processed. Skipping.`);
+        return;
+      }
+      
+      // Verify the trip exists
+      const tripRef = db.collection('tripPlans').doc(tripId);
+      const tripDoc = await tripRef.get();
+      
+      if (!tripDoc.exists) {
+        console.error(`Trip ${tripId} not found for payment ${paymentIntent.id}`);
+        return;
+      }
+      
+      // Use a transaction for atomic operations
+      await db.runTransaction(async (t) => {
+        // Re-check if payment exists inside transaction
+        const existingPaymentsRef = db.collection('payments')
+          .where('paymentIntentId', '==', paymentIntent.id)
+          .limit(1);
+        
+        const existingPayments = await t.get(existingPaymentsRef);
+        
+        if (!existingPayments.empty) {
+          console.log(`Payment ${paymentIntent.id} already processed (found in transaction). Skipping.`);
+          return;
+        }
+        
+        // Create payment record
+        const paymentRecord = {
+          paymentIntentId: paymentIntent.id,
+          tripId,
+          userId,
+          amount: paymentIntent.amount / 100,
+          amountInCents: paymentIntent.amount,
+          status: 'completed',
+          paymentMethod: paymentIntent.payment_method_types[0] || 'card',
+          currency: paymentIntent.currency,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          metadata: paymentIntent.metadata || {},
+          stripeResponse: {
+            status: paymentIntent.status,
+            created: paymentIntent.created,
+            id: paymentIntent.id
+          },
+          recordedBy: 'webhook'
+        };
+        
+        // Create a reference for the new payment document
+        const paymentRef = db.collection('payments').doc();
+        
+        // Set the payment document in the transaction
+        t.set(paymentRef, paymentRecord);
+        
+        // Update the trip document to mark it as paid
+        t.update(tripRef, {
+          paymentStatus: 'paid',
+          paymentId: paymentRef.id,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        console.log(`Payment ${paymentIntent.id} recorded successfully via webhook`);
       });
       
-      console.log(`Payment ${paymentIntent.id} recorded successfully via webhook`);
-    });
-  } catch (error) {
-    console.error('Error processing webhook payment success:', error);
-    // Let the error bubble up to the caller
-    throw error;
+      // If transaction succeeded, break out of retry loop
+      break;
+    } catch (error) {
+      console.error(`Error processing webhook payment (attempt ${retryCount + 1}):`, error);
+      
+      // Only retry certain types of errors
+      if (error.code === 'aborted' || error.code === 'unavailable' || error.code === 'internal') {
+        retryCount++;
+        if (retryCount < maxRetries) {
+          // Exponential backoff with jitter
+          const backoffTime = Math.floor(Math.random() * 1000) + (1000 * Math.pow(2, retryCount));
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+        }
+      } else {
+        // Don't retry other errors
+        throw error;
+      }
+    }
   }
 }
 
 // Helper function to handle failed payment intents from webhook
 async function handlePaymentIntentFailed(paymentIntent) {
-  try {
-    // Extract metadata
-    const { tripId, userId } = paymentIntent.metadata;
-    
-    if (!tripId || !userId) {
-      console.error('Missing required metadata in failed payment intent:', paymentIntent.id);
-      return;
+  let retryCount = 0;
+  const maxRetries = 3;
+  
+  while (retryCount < maxRetries) {
+    try {
+      // Extract metadata
+      const { tripId, userId } = paymentIntent.metadata;
+      
+      if (!tripId || !userId) {
+        console.error('Missing required metadata in failed payment intent:', paymentIntent.id);
+        return;
+      }
+      
+      // Update trip payment status
+      const tripRef = db.collection('tripPlans').doc(tripId);
+      await tripRef.update({
+        paymentStatus: 'failed',
+        paymentError: paymentIntent.last_payment_error?.message || 'Payment failed',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      
+      console.log(`Trip ${tripId} marked as payment failed due to webhook event`);
+      
+      // Success, break out of retry loop
+      break;
+    } catch (error) {
+      console.error(`Error processing webhook payment failure (attempt ${retryCount + 1}):`, error);
+      
+      retryCount++;
+      if (retryCount < maxRetries) {
+        // Simple backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      } else {
+        throw error;
+      }
     }
-    
-    // Update trip payment status
-    const tripRef = db.collection('tripPlans').doc(tripId);
-    await tripRef.update({
-      paymentStatus: 'failed',
-      paymentError: paymentIntent.last_payment_error?.message || 'Payment failed',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    console.log(`Trip ${tripId} marked as payment failed due to webhook event`);
-  } catch (error) {
-    console.error('Error processing webhook payment failure:', error);
-    throw error;
   }
 }
