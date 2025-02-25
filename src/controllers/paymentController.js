@@ -312,7 +312,6 @@ exports.getPaymentHistory = async (req, res) => {
     // Query Firestore for user's payment history
     const paymentsSnapshot = await db.collection('payments')
       .where('userId', '==', userId)
-      .orderBy('createdAt', 'desc')
       .get();
       
     const payments = [];
