@@ -61,10 +61,10 @@ exports.createPaymentIntent = async (req, res) => {
         idempotencyKey: `ephemeral_${idempotencyKey}`
       }
     );
-
+    console.log('Creating payment intent with amount:', amount, typeof amount);
     // Create a payment intent with idempotency key
     const paymentIntent = await stripe.paymentIntents.create({
-      amount,
+      amount:amount,
       currency: 'usd',
       customer: customer.id,
       automatic_payment_methods: { enabled: true },
