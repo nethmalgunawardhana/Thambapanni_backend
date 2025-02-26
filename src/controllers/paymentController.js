@@ -6,6 +6,9 @@ const SECRET_KEY = process.env.SECRET_KEY;
 // Create a payment intent
 exports.createPaymentIntent = async (req, res) => {
   try {
+    // Debug the entire request body
+    console.log('Request body:', JSON.stringify(req.body));
+    
     // Extract user ID from JWT token
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -23,11 +26,22 @@ exports.createPaymentIntent = async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
 
+    // Destructure and log individual properties from req.body
     const { amount, tripId } = req.body;
+    console.log('Extracted amount:', amount, typeof amount);
+    console.log('Extracted tripId:', tripId);
 
-    // Validate inputs
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ success: false, error: 'Invalid amount' });
+    // Validate inputs with better error messages
+    if (amount === undefined || amount === null) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Amount is missing',
+        debug: { receivedBody: req.body }
+      });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
     }
 
     if (!tripId) {
@@ -62,19 +76,30 @@ exports.createPaymentIntent = async (req, res) => {
       }
     );
     
-    // Debug log - converted to number to ensure it's not a string
-    console.log('Creating payment intent with amount:', amount, typeof amount);
-    
-    // Ensure amount is a number
-    const amountValue = Number(amount);
-    
-    if (isNaN(amountValue)) {
-      return res.status(400).json({ success: false, error: 'Amount must be a valid number' });
+    // Ensure amount is a number with better error handling
+    let amountValue;
+    try {
+      amountValue = Number(amount);
+      if (isNaN(amountValue)) {
+        throw new Error('Amount cannot be converted to a number');
+      }
+    } catch (error) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Invalid amount format',
+        message: error.message,
+        debug: { receivedAmount: amount, type: typeof amount }
+      });
     }
     
-    // Create a payment intent with idempotency key
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amountValue, // Fixed: proper spacing and ensuring it's a number
+    // Round to integer if not already (Stripe requires integer amounts in cents)
+    amountValue = Math.round(amountValue);
+    
+    console.log('Final amount to be sent to Stripe:', amountValue);
+    
+    // Prepare payment intent parameters
+    const paymentIntentParams = {
+      amount: amountValue,
       currency: 'usd',
       customer: customer.id,
       automatic_payment_methods: { enabled: true },
@@ -82,9 +107,16 @@ exports.createPaymentIntent = async (req, res) => {
         tripId, 
         userId,
         appReference: idempotencyKey
-      },
-      idempotencyKey: idempotencyKey
-    });
+      }
+    };
+    
+    console.log('Payment intent parameters:', JSON.stringify(paymentIntentParams));
+    
+    // Create a payment intent with idempotency key
+    const paymentIntent = await stripe.paymentIntents.create(
+      paymentIntentParams,
+      { idempotencyKey: idempotencyKey }
+    );
 
     // Also update trip with pending payment status
     await db.collection('tripPlans').doc(tripId).update({
@@ -102,11 +134,25 @@ exports.createPaymentIntent = async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating payment intent:', error);
-    res.status(500).json({ 
+    
+    // Enhanced error reporting for debugging
+    let errorResponse = { 
       success: false, 
       error: 'Failed to create payment intent',
       message: error.message || 'Unknown error occurred'
-    });
+    };
+    
+    // Add Stripe-specific error details if available
+    if (error.type && error.type.startsWith('Stripe')) {
+      errorResponse.stripeError = {
+        type: error.type,
+        code: error.code,
+        param: error.param,
+        detail: error.raw ? error.raw.message : null
+      };
+    }
+    
+    res.status(500).json(errorResponse);
   }
 };
 // Handle successful payments and store in Firestore
