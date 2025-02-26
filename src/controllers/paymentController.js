@@ -61,10 +61,20 @@ exports.createPaymentIntent = async (req, res) => {
         idempotencyKey: `ephemeral_${idempotencyKey}`
       }
     );
+    
+    // Debug log - converted to number to ensure it's not a string
     console.log('Creating payment intent with amount:', amount, typeof amount);
+    
+    // Ensure amount is a number
+    const amountValue = Number(amount);
+    
+    if (isNaN(amountValue)) {
+      return res.status(400).json({ success: false, error: 'Amount must be a valid number' });
+    }
+    
     // Create a payment intent with idempotency key
     const paymentIntent = await stripe.paymentIntents.create({
-      amount:amount,
+      amount: amountValue, // Fixed: proper spacing and ensuring it's a number
       currency: 'usd',
       customer: customer.id,
       automatic_payment_methods: { enabled: true },
@@ -99,7 +109,6 @@ exports.createPaymentIntent = async (req, res) => {
     });
   }
 };
-
 // Handle successful payments and store in Firestore
 exports.handlePaymentSuccess = async (req, res) => {
   let transactionAttempt = 0;
