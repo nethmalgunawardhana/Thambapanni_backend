@@ -312,7 +312,7 @@ Respond **ONLY** with a valid JSON object. No explanations, markdown, or extra t
 `;
 
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-pro",
+      model: "gemini-1.5-pro",
       generationConfig: {
         maxOutputTokens: 2048,
         temperature: 0.7
