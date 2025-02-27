@@ -23,7 +23,7 @@ exports.sendOtp = async (req, res) => {
 
     // Generate OTP and expiration time
     const otp = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
+    const expiresAt = new Date(Date.now() + 3 * 60 * 1000); // OTP valid for 10 minutes
 
     // Save OTP to Firestore
     await db.collection('otp').doc(email).set({
