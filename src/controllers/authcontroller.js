@@ -48,7 +48,7 @@ exports.registerUser = async (req, res) => {
       dynamicTemplateData: {
         firstName,
         verificationUrl,
-        expiration: '1 minute',
+        expiration: '10 minute',
       },
     };
 
@@ -138,7 +138,7 @@ exports.loginUser = async (req, res) => {
     const token = jwt.sign(
       { email: userData.email, userId: userSnapshot.docs[0].id },
       SECRET_KEY,
-      { expiresIn: '1h' }
+      { expiresIn: '3h' }
     );
 
     res.status(200).json({
