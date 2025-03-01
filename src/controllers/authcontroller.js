@@ -25,7 +25,7 @@ exports.registerUser = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const verificationToken = jwt.sign({ email }, SECRET_KEY, { expiresIn: '1m' });
+    const verificationToken = jwt.sign({ email }, SECRET_KEY, { expiresIn: '10m' });
 
     const userRef = await db.collection('users').add({
       firstName,
@@ -48,7 +48,7 @@ exports.registerUser = async (req, res) => {
       dynamicTemplateData: {
         firstName,
         verificationUrl,
-        expiration: '10 minute',
+        expiration: '10 minutes',
       },
     };
 
