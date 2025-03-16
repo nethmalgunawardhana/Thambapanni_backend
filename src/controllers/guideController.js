@@ -366,7 +366,7 @@ const tripSummary = `
     
     return `
       <div class="day-container" style="margin-bottom: 25px; padding: 15px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <h3 style="color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px;">Day ${dayNumber} - ${dateDisplay}</h3>
+        <h3 style="color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px;">Day ${dayNumber}</h3>
         <div class="day-details">
           <p><strong>🚗 Transportation:</strong> ${day.transportation || 'Not specified'}</p>
           <p><strong>🏨 Accommodation:</strong> ${day.accommodation || 'Not specified'}</p>
